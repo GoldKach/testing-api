@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  password      String
+  image         String         @default("https://y2fxfl5cnq.ufs.sh/f/NMmMr48gm28W8uLodAOyiZJafIVQ6TpdgKRrwk39xvLPlh1b")
+  phone         String         @unique
+  firstName     String
+  lastName      String
+  role          UserRole       @default(USER)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  bookings      Booking[]
+  refreshTokens RefreshToken[]
+  parkingLotId  String?        // Add this
+  parkingLot    ParkingLot?    @relation(fields: [parkingLotId], references: [id])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Region {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  cities      City[]
+  parkingLots ParkingLot[]
+}
+
+model City {
+  id          String       @id @default(uuid())
+  name        String
+  regionId    String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  areas       Area[]
+  region      Region       @relation(fields: [regionId], references: [id])
+  parkingLots ParkingLot[]
+}
+
+model Area {
+  id          String       @id @default(uuid())
+  name        String
+  cityId      String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  city        City         @relation(fields: [cityId], references: [id])
+  parkingLots ParkingLot[]
+  streets     Street[]
+}
+
+model Street {
+  id        String        @id @default(uuid())
+  name      String
+  areaId    String
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  lots      ParkingLot[]
+  spots     ParkingSpot[]
+  area      Area          @relation(fields: [areaId], references: [id])
+}
+
+model ParkingLot {
+  id            String        @id @default(uuid())
+  name          String        @unique
+  address       String
+  plotNo        String
+  latitude      Float
+  longitude     Float
+  openingHour   String
+  closingHour   String
+  securityLevel String
+  capacity      Int           @default(0)
+  status        LotStatus     @default(OPEN)
+  streetId      String
+  areaId        String
+  cityId        String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  regionId      String
+  pricePerHour  Float         @default(1000)
+  bookings      Booking[]
+  area          Area          @relation(fields: [areaId], references: [id])
+  city          City          @relation(fields: [cityId], references: [id])
+  region        Region        @relation(fields: [regionId], references: [id])
+  street        Street        @relation(fields: [streetId], references: [id])
+  spots         ParkingSpot[]
+  users         User[]
+}
+
+model ParkingSpot {
+  id           String     @id @default(uuid())
+  slotCode     String     @unique
+  slotNumber   Float      @default(1)
+  parkingLotId String
+  spotStatus   SpotStatus @default(AVAILABLE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  streetId     String
+  bookings     Booking[]
+  parkingLot   ParkingLot @relation(fields: [parkingLotId], references: [id])
+  street       Street     @relation(fields: [streetId], references: [id])
+}
+
+model Booking {
+  id            String        @id @default(uuid())
+  userId        String
+  parkingSpotId String
+  parkingLotId  String
+  startTime     DateTime
+  paymentMethod PaymentMethod @default(CASH)
+  totalAmount   Float
+  paymentStatus PaymentStatus @default(PENDING)
+  bookingStatus BookingStatus @default(PENDING)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  hours         Float
+  parkingLot    ParkingLot    @relation(fields: [parkingLotId], references: [id])
+  parkingSpot   ParkingSpot   @relation(fields: [parkingSpotId], references: [id])
+  user          User          @relation(fields: [userId], references: [id])
+}
+
+enum UserRole {
+  USER
+  SPOT_ADMIN
+  SUPER_ADMIN
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum PaymentMethod {
+  CASH
+  MOBILE_MONEY
+  CREDIT_CARD
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+  OCCUPIED
+  CANCELLED
+  COMPLETED
+}
+
+enum SpotStatus {
+  AVAILABLE
+  BOOKED
+  OCCUPIED
+  MAINTENANCE
+}
+
+enum LotStatus {
+  OPEN
+  CLOSED
+  FULL
+  MAINTENANCE
+}
