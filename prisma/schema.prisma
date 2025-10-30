@@ -1,27 +1,87 @@
+
 generator client {
   provider = "prisma-client-js"
 }
+
+// re_BpM46JvH_CaR1rdHpqLoXa2qMQkt2NmgG
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  password      String
-  image         String         @default("https://y2fxfl5cnq.ufs.sh/f/NMmMr48gm28W8uLodAOyiZJafIVQ6TpdgKRrwk39xvLPlh1b")
-  phone         String         @unique
+ id            String    @id @default(cuid())
+  name          String
   firstName     String
   lastName      String
-  role          UserRole       @default(USER)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  bookings      Booking[]
+  phone         String    @unique
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  password      String
+  imageUrl      String @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
+  role          UserRole  @default(USER)
+  status        UserStatus @default(PENDING)
+  accounts      Account[]
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  isApproved    Boolean   @default(false)
+  token         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  roleId        String?
+  entityOnboarding EntityOnboarding?
+  wallet             Wallet? // one-to-one relationship
+  deposits            Deposit[]
+  withdrawals         Withdrawal[]
+  portfolioSummary    PortfolioSummary[]
+   userPortfolios    UserPortfolio[]
+   activityLogs       ActivityLog[]
   refreshTokens RefreshToken[]
-  parkingLotId  String?        // Add this
-  parkingLot    ParkingLot?    @relation(fields: [parkingLotId], references: [id])
+
+}
+
+enum UserRole {
+  SUPER_ADMIN  
+  MANAGER 
+  ADMIN                 
+  USER      
+}
+enum UserStatus {
+  ACTIVE            // normal active account
+  INACTIVE          // default, cannot login
+  PENDING           // awaiting email verification
+  SUSPENDED        // temporarily blocked
+  DEACTIVATED       
+  BANNED             
 }
 
 model RefreshToken {
@@ -32,148 +92,266 @@ model RefreshToken {
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model Region {
-  id          String       @id @default(uuid())
-  name        String       @unique
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  cities      City[]
-  parkingLots ParkingLot[]
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   // store only the hash of the raw token
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
 }
 
-model City {
-  id          String       @id @default(uuid())
-  name        String
-  regionId    String
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  areas       Area[]
-  region      Region       @relation(fields: [regionId], references: [id])
-  parkingLots ParkingLot[]
+
+model EntityOnboarding {
+  id                       String   @id @default(cuid())
+  entityType               String   // ideally enum: "individual" | "company"
+  fullName                 String
+   userId                   String   @unique
+  user                     User     @relation(fields: [userId], references: [id],onDelete: Cascade,onUpdate: Cascade)
+  dateOfBirth              DateTime
+  tin                      String @unique
+  avatarUrl                 String?
+  idUrl                     String?
+  homeAddress              String
+  email                    String
+  phoneNumber              String
+  employmentStatus         String
+  occupation               String
+  companyName              String?
+  hasBusiness              String?
+  registrationNumber       String?
+  companyAddress           String?
+  businessType             String?
+  incorporationDate        DateTime?
+  authorizedRepName        String?
+  isApproved            Boolean  @default(false)
+  authorizedRepEmail       String?
+  authorizedRepPhone       String?
+  authorizedRepPosition    String?
+  primaryGoal              String
+  timeHorizon              String
+  riskTolerance            String
+  investmentExperience     String
+  isPEP                    String   // ideally boolean or enum
+  consentToDataCollection  Boolean
+  agreeToTerms             Boolean
+  sourceOfWealth           String
+  businessOwnership        String
+  employmentIncome         String
+  expectedInvestment       String
+  businessName             String
+  businessAddress          String
+  establishmentDate        DateTime
+  ownershipPercentage      String
+  familyMemberDetails      String
+  publicPosition           String
+  relationshipToCountry    String
+  sanctionsOrLegal         String   // ideally boolean or enum
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 }
 
-model Area {
-  id          String       @id @default(uuid())
-  name        String
-  cityId      String
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  city        City         @relation(fields: [cityId], references: [id])
-  parkingLots ParkingLot[]
-  streets     Street[]
+model Wallet {
+  id              String      @id @default(cuid())
+  accountNumber   String      @unique
+  userId          String @unique
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  balance              Float       @default(0.0)
+  bankFee              Float       @default(30)
+  transactionFee       Float       @default(10)
+  feeAtBank            Float       @default(10)
+  totalFees            Float @default(50.0)
+  netAssetValue        Float @default(0.0)
+  status          AccountStatus @default(ACTIVE)
+  deposits        Deposit[]
+  withdrawals     Withdrawal[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 }
 
-model Street {
-  id        String        @id @default(uuid())
-  name      String
-  areaId    String
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
-  lots      ParkingLot[]
-  spots     ParkingSpot[]
-  area      Area          @relation(fields: [areaId], references: [id])
+
+model Asset {
+  id                   String     @id @default(cuid())
+  symbol               String     @unique
+  description          String
+  sector               String
+  allocationPercentage Float @default(0.0)
+  costPerShare         Float @default(0.0)
+  closePrice           Float @default(0.0)
+  portfolios           PortfolioAsset[]
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
 }
 
-model ParkingLot {
-  id            String        @id @default(uuid())
-  name          String        @unique
-  address       String
-  plotNo        String
-  latitude      Float
-  longitude     Float
-  openingHour   String
-  closingHour   String
-  securityLevel String
-  capacity      Int           @default(0)
-  status        LotStatus     @default(OPEN)
-  streetId      String
-  areaId        String
-  cityId        String
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  regionId      String
-  pricePerHour  Float         @default(1000)
-  bookings      Booking[]
-  area          Area          @relation(fields: [areaId], references: [id])
-  city          City          @relation(fields: [cityId], references: [id])
-  region        Region        @relation(fields: [regionId], references: [id])
-  street        Street        @relation(fields: [streetId], references: [id])
-  spots         ParkingSpot[]
-  users         User[]
+model PortfolioSummary {
+  id              String      @id @default(cuid())
+  cashAtBank       Float
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashOutstanding Float
+  cashAvailable   Float
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 }
 
-model ParkingSpot {
-  id           String     @id @default(uuid())
-  slotCode     String     @unique
-  slotNumber   Float      @default(1)
-  parkingLotId String
-  spotStatus   SpotStatus @default(AVAILABLE)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  streetId     String
-  bookings     Booking[]
-  parkingLot   ParkingLot @relation(fields: [parkingLotId], references: [id])
-  street       Street     @relation(fields: [streetId], references: [id])
+model UserPortfolio {
+  id              String             @id @default(cuid())
+  userId          String
+  portfolioId     String
+  portfolioValue  Float              @default(0.0) 
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio       Portfolio          @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  userAssets      UserPortfolioAsset[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  @@unique([userId, portfolioId])
 }
 
-model Booking {
-  id            String        @id @default(uuid())
-  userId        String
-  parkingSpotId String
-  parkingLotId  String
-  startTime     DateTime
-  paymentMethod PaymentMethod @default(CASH)
-  totalAmount   Float
-  paymentStatus PaymentStatus @default(PENDING)
-  bookingStatus BookingStatus @default(PENDING)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  hours         Float
-  parkingLot    ParkingLot    @relation(fields: [parkingLotId], references: [id])
-  parkingSpot   ParkingSpot   @relation(fields: [parkingSpotId], references: [id])
-  user          User          @relation(fields: [userId], references: [id])
+model Portfolio {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String?
+  timeHorizon String
+  riskTolerance String
+  allocationPercentage  Float @default(100)
+  assets      PortfolioAsset[]
+  userPortfolios UserPortfolio[] // join table to users
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 }
 
-enum UserRole {
-  USER
-  SPOT_ADMIN
-  SUPER_ADMIN
+model PortfolioAsset {
+  id          String     @id @default(cuid())
+  portfolioId String
+  assetId     String 
+  lossGain             Float @default(0.0)
+  closeValue           Float @default(0.0)
+  costPrice            Float @default(0.0)
+  stock                Float @default(0.0)
+  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  asset       Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  userAssets    UserPortfolioAsset[] 
+  @@unique([portfolioId, assetId]) // prevent duplicate assignments
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
 }
 
-enum PaymentStatus {
-  PENDING
-  COMPLETED
-  FAILED
+model UserPortfolioAsset {
+  id                String     @id @default(cuid())
+  userPortfolioId   String
+  portfolioAssetId  String
+  costPrice         Float      @default(0.0) // = asset.allocPercent × user.wallet.netAssetValue
+  stock             Float      @default(0.0) // = costPrice ÷ asset.costPerShare
+  closeValue        Float      @default(0.0) // = asset.closePrice × stock
+  lossGain          Float      @default(0.0) // = closeValue - costPrice
+  userPortfolio     UserPortfolio   @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  portfolioAsset    PortfolioAsset  @relation(fields: [portfolioAssetId], references: [id], onDelete: Cascade)
+  @@unique([userPortfolioId, portfolioAssetId])
 }
 
-enum PaymentMethod {
-  CASH
-  MOBILE_MONEY
-  CREDIT_CARD
+model Deposit {
+  id          String   @id @default(cuid())
+  walletId   String
+  wallet     Wallet  @relation(fields: [walletId], references: [id], onDelete: Cascade,onUpdate: Cascade)
+  amount      Float
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  transactionId String? @unique
+  transactionStatus transactionStatus @default(PENDING)
+  mobileNo    String?
+  referenceNo String?
+  AccountNo  String?
+   ApprovedBy String? 
+  method      String?
+  description String?
+  createdAt   DateTime @default(now())
 }
 
-enum BookingStatus {
-  PENDING
-  CONFIRMED
-  EXPIRED
-  OCCUPIED
-  CANCELLED
-  COMPLETED
+model Withdrawal {
+  id          String   @id @default(cuid())
+  walletId   String
+  wallet     Wallet  @relation(fields: [walletId], references: [id], onDelete: Cascade,onUpdate: Cascade)
+  amount      Float
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  transactionStatus transactionStatus @default(PENDING) 
+  AccountNo  String?
+  AccountName  String?
+  referenceNo String
+  transactionId String? @unique
+  method      String? 
+  bankName    String
+  bankAccountName String
+  bankBranch   String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime         @updatedAt
 }
 
-enum SpotStatus {
-  AVAILABLE
-  BOOKED
-  OCCUPIED
-  MAINTENANCE
+
+model ActivityLog {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action         String
+  module         String?   // e.g., "wallet", "portfolio", "auth"
+  status         String?   // e.g., "SUCCESS", "FAILED"
+  description    String?
+  method         String?   // e.g., "POST", "GET", "WITHDRAW"
+  platform       String?   // e.g., "web", "mobile", "api"
+  performedByRole String?  // from user.roles
+  entityId       String?
+  entityType     String?   // e.g., "Deposit", "Withdrawal"
+  referrerUrl    String?
+  ipAddress      String?
+  userAgent      String?
+  location       String?
+  isAutomated    Boolean?  @default(false)
+  durationMs     Int?
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId, action, createdAt])
 }
 
-enum LotStatus {
-  OPEN
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
   CLOSED
-  FULL
-  MAINTENANCE
+  FROZEN
 }
+enum transactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
