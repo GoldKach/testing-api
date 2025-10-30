@@ -3,6 +3,8 @@ require("dotenv").config();
 import express from "express";
 import userRouter from "./routes/users";
 import authRouter from "./routes/auth";
+import assetsRouter from "./routes/assets";
+import onboardingRouter from "./routes/onboarding";
 const cors = require("cors");
 
 const app = express();
@@ -17,4 +19,6 @@ app.listen(PORT, () => {
 });
 
 app.use("/api/v1", userRouter); 
-app.use("api/v1",authRouter)
+app.use("api/v1",authRouter);
+app.use("api/v1",onboardingRouter);
+app.use("/api/v1", assetsRouter);
