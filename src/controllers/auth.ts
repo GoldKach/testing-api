@@ -2,7 +2,7 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { db } from "@/db/db";           // Prisma
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 // import  {jwt} from "jsonwebtoken";
 import { sendResetEmailResend } from "@/utils/mailer";
 import { sendVerificationCodeResend } from "@/lib/mailer";
