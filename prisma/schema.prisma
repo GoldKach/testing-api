@@ -190,16 +190,7 @@ model Asset {
   updatedAt            DateTime   @updatedAt
 }
 
-model PortfolioSummary {
-  id              String      @id @default(cuid())
-  cashAtBank       Float
-  userId          String
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  cashOutstanding Float
-  cashAvailable   Float
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-}
+
 
 model UserPortfolio {
   id              String             @id @default(cuid())
@@ -225,6 +216,18 @@ model Portfolio {
   userPortfolios UserPortfolio[] // join table to users
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
+}
+
+
+model PortfolioSummary {
+  id              String      @id @default(cuid())
+  cashAtBank       Float
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashOutstanding Float
+  cashAvailable   Float
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 }
 
 model PortfolioAsset {
@@ -286,7 +289,7 @@ model Withdrawal {
   AccountName  String?
   referenceNo String
   transactionId String? @unique
-  method      String? 
+  method      String?
   bankName    String
   bankAccountName String
   bankBranch   String

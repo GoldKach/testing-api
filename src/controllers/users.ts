@@ -376,6 +376,11 @@ export async function getAllUsers(req: AuthRequest, res: Response) {
         deposits: true,
         wallet:true,
         withdrawals: true,
+        userPortfolios: {
+          select:{
+            userAssets:true,  
+          }
+        },
         activityLogs: true,
 
       },
@@ -399,16 +404,39 @@ export async function getCurrentUser(req: AuthRequest, res: Response) {
 
     const user = await db.user.findUnique({
       where: { id: req.user.userId },
-      select: {
+        select: {
         id: true,
         firstName: true,
         lastName: true,
         name: true,
         email: true,
         phone: true,
+         emailVerified: true, // ⬅️ add
+        status: true,      // ⬅️ add
+        isApproved: true,  
         imageUrl: true,
         role: true,
-        status: true,
+        entityOnboarding: true,
+        
+
+          wallet: true,
+          withdrawals: true,
+          userPortfolios:{
+            select:{
+              userAssets:{
+                select:{
+                  portfolioAsset:{
+                    select:{
+                      asset:true,
+                  }},
+              }},
+              portfolio:true,
+              user:true,
+
+            }
+          },
+          deposits: true,
+        // token: true, // ❌ remove this from production responses
         createdAt: true,
         updatedAt: true,
       },
@@ -466,9 +494,24 @@ export async function getUserById(req: Request, res: Response) {
         imageUrl: true,
         role: true,
         entityOnboarding: true,
+        
+
           wallet: true,
           withdrawals: true,
-          userPortfolios: true,
+          userPortfolios:{
+            select:{
+              userAssets:{
+                select:{
+                  portfolioAsset:{
+                    select:{
+                      asset:true,
+                  }},
+              }},
+              portfolio:true,
+              user:true,
+
+            }
+          },
           deposits: true,
         // token: true, // ❌ remove this from production responses
         createdAt: true,
