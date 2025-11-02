@@ -8,6 +8,8 @@ import onboardingRouter from "./routes/onboarding";
 import portfolioRouter from "./routes/portfolio";
 import portfolioAssetRouter from "./routes/portfolio-assets";
 import userPortfolioRouter from "./routes/userportfolio";
+import depositsRouter from "./routes/deposits";
+import withdrawalsRouter from "./routes/withdraws";
 const cors = require("cors");
 
 const app = express();
@@ -28,3 +30,5 @@ app.use("/api/v1", assetsRouter);
 app.use("/api/v1", portfolioRouter);
 app.use("/api/v1", portfolioAssetRouter);
 app.use("/api/v1", userPortfolioRouter);
+app.use("/api/v1", depositsRouter);
+app.use("/api/v1", withdrawalsRouter);

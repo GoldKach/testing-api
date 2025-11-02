@@ -466,25 +466,109 @@ export async function listUserPortfolios(req: Request, res: Response) {
 /* --------------------------------------------
    READ ONE  (GET /user-portfolios/:id?include=...)
 --------------------------------------------- */
-export async function getUserPortfolioById(req: Request, res: Response) {
+// export async function getUserPortfolioById(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
+
+//     const include = parseInclude(req.query);
+
+//     const item = await db.userPortfolio.findUnique({
+//       where: { id },
+//       include,
+//     });
+
+//     if (!item) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
+//     return res.status(200).json({ data: item, error: null });
+//   } catch (err) {
+//     console.error("getUserPortfolioById error:", err);
+//     return res.status(500).json({ data: null, error: "Failed to load user-portfolio." });
+//   }
+// }
+
+// export async function getUserPortfolioById(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
+
+//     const item = await db.userPortfolio.findUnique({
+//       where: { id },
+//       include: {
+//         user: { include: { wallet: true } },
+//         portfolio: { include: { assets: { include: { asset: true } } } },
+//         userAssets: {
+//           include: {
+//             portfolioAsset: {
+//               include: {
+//                 asset: true
+//               }
+//             }
+//           }
+//         },
+//       },
+//     });
+
+//     if (!item) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
+//     return res.status(200).json({ data: item, error: null });
+//   } catch (err) {
+//     console.error("getUserPortfolioById error:", err);
+//     return res.status(500).json({ data: null, error: "Failed to load user-portfolio." });
+//   }
+// }
+
+// actions/user-portfolios.ts
+export async function getUserPortfolioById(id: string) {
   try {
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ data: null, error: "Missing id." });
-
-    const include = parseInclude(req.query);
-
-    const item = await db.userPortfolio.findUnique({
+    // Try to find by UserPortfolio ID first
+    let portfolio = await db.userPortfolio.findUnique({
       where: { id },
-      include,
+      include: {
+        user: { include: { wallet: true } },
+        portfolio: { include: { assets: { include: { asset: true } } } },
+        userAssets: {
+          include: {
+            portfolioAsset: {
+              include: {
+                asset: true
+              }
+            }
+          }
+        },
+      },
     });
 
-    if (!item) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
-    return res.status(200).json({ data: item, error: null });
+    // If not found, try finding by portfolioId
+    if (!portfolio) {
+      portfolio = await db.userPortfolio.findFirst({
+        where: { portfolioId: id },
+        include: {
+          user: { include: { wallet: true } },
+          portfolio: { include: { assets: { include: { asset: true } } } },
+          userAssets: {
+            include: {
+              portfolioAsset: {
+                include: {
+                  asset: true
+                }
+              }
+            }
+          },
+        },
+      });
+    }
+
+    if (!portfolio) {
+      return { data: null, error: "Portfolio not found" };
+    }
+
+    return { data: portfolio, error: null };
   } catch (err) {
     console.error("getUserPortfolioById error:", err);
-    return res.status(500).json({ data: null, error: "Failed to load user-portfolio." });
+    return { data: null, error: "Failed to load portfolio." };
   }
 }
+
+
 
 /* --------------------------------------------
    UPDATE (PATCH /user-portfolios/:id)
