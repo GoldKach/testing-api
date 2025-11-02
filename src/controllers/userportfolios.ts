@@ -444,7 +444,16 @@ export async function listUserPortfolios(req: Request, res: Response) {
     const items = await db.userPortfolio.findMany({
       where: Object.keys(where).length ? where : undefined,
       orderBy: { createdAt: "desc" },
-      include,
+      include:{
+        user: { include: { wallet: true } },
+        portfolio: { include: { assets: { include: { asset: true } } } },
+        userAssets: {
+          include: {
+            portfolioAsset: {
+              include: {
+                asset: true}
+      }}},
+      },
     });
 
     return res.status(200).json({ data: items, error: null });
