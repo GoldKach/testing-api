@@ -24,8 +24,8 @@ app.listen(PORT, () => {
 });
 
 app.use("/api/v1", userRouter); 
-app.use("api/v1",authRouter);
-app.use("api/v1",onboardingRouter);
+app.use("/api/v1",authRouter);
+app.use("/api/v1",onboardingRouter);
 app.use("/api/v1", assetsRouter);
 app.use("/api/v1", portfolioRouter);
 app.use("/api/v1", portfolioAssetRouter);

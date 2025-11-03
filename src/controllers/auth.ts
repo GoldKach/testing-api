@@ -204,23 +204,95 @@ export async function resendVerification(req: Request, res: Response) {
 // }
 
 
+// export async function verifyEmail(req: Request, res: Response) {
+//   const { email, token } = req.body as { email: string; token: string };
+//   if (!email || !token) return res.status(400).json({ error: "Missing fields." });
+
+//   const user = await db.user.findUnique({
+//     where: { email: email.trim().toLowerCase() },
+//   });
+
+//   if (!user || !user.token || user.token !== token) {
+//     return res.status(400).json({ error: "Invalid verification code." });
+//   }
+
+//   // Mark verified; clear the one-time code
+//   await db.user.update({
+//     where: { id: user.id },
+//     data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
+//   });
+
+//   // No auth cookies/tokens here!
+//   return res.status(200).json({
+//     ok: true,
+//     userId: user.id,
+//     email: user.email,
+//   });
+// }
+
+// controllers/auth.ts - FIXED verifyEmail function
+
 export async function verifyEmail(req: Request, res: Response) {
   const { email, token } = req.body as { email: string; token: string };
-  if (!email || !token) return res.status(400).json({ error: "Missing fields." });
+  
+  // Log what we received
+  console.log("[verifyEmail] Received request");
+  console.log("[verifyEmail] Email:", email);
+  console.log("[verifyEmail] Token:", token);
+  console.log("[verifyEmail] Token type:", typeof token);
+  
+  if (!email || !token) {
+    console.log("[verifyEmail] Missing fields");
+    return res.status(400).json({ error: "Missing fields." });
+  }
 
+  // Normalize email
+  const normalizedEmail = email.trim().toLowerCase();
+  console.log("[verifyEmail] Normalized email:", normalizedEmail);
+
+  // Find user
   const user = await db.user.findUnique({
-    where: { email: email.trim().toLowerCase() },
+    where: { email: normalizedEmail },
   });
 
-  if (!user || !user.token || user.token !== token) {
+  if (!user) {
+    console.log("[verifyEmail] User not found");
     return res.status(400).json({ error: "Invalid verification code." });
   }
+
+  console.log("[verifyEmail] User found - ID:", user.id);
+  console.log("[verifyEmail] User token in DB:", user.token);
+  console.log("[verifyEmail] User token type:", typeof user.token);
+
+  // Check if user has a token
+  if (!user.token) {
+    console.log("[verifyEmail] No token in database (already used?)");
+    return res.status(400).json({ error: "Invalid verification code." });
+  }
+
+  // 🔥 CRITICAL FIX: Normalize both tokens before comparison
+  const dbToken = String(user.token).trim();
+  const inputToken = String(token).trim();
+  
+  console.log("[verifyEmail] Comparing tokens:");
+  console.log("  - DB token:", dbToken);
+  console.log("  - Input token:", inputToken);
+  console.log("  - Match:", dbToken === inputToken);
+
+  if (dbToken !== inputToken) {
+    console.log("[verifyEmail] Token mismatch!");
+    return res.status(400).json({ error: "Invalid verification code." });
+  }
+
+  console.log("[verifyEmail] Token verified successfully, updating user...");
 
   // Mark verified; clear the one-time code
   await db.user.update({
     where: { id: user.id },
     data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
   });
+
+  console.log("[verifyEmail] User updated successfully");
 
   // No auth cookies/tokens here!
   return res.status(200).json({
