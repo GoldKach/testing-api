@@ -777,7 +777,50 @@ export async function updateDeposit(req: Request, res: Response) {
  * POST /deposits/:id/approve
  * Body: { ApprovedBy?: string }
  * Changes status to APPROVED and credits wallet
- */
+//  */
+// export async function approveDeposit(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     const { ApprovedBy } = req.body as { ApprovedBy?: string };
+
+//     const existing = await db.deposit.findUnique({ where: { id } });
+//     if (!existing) return res.status(404).json({ data: null, error: "Deposit not found" });
+    
+//     if (existing.transactionStatus === Status.APPROVED) {
+//       return res.status(200).json({ data: existing, error: null });
+//     }
+
+//     // Don't allow approving rejected deposits
+//     if (existing.transactionStatus === Status.REJECTED) {
+//       return res.status(409).json({ 
+//         data: null, 
+//         error: "Cannot approve a rejected deposit" 
+//       });
+//     }
+
+//     const approved = await db.$transaction(async (tx) => {
+//       const row = await tx.deposit.update({
+//         where: { id },
+//         data: { 
+//           transactionStatus: Status.APPROVED, 
+//           ApprovedBy: ApprovedBy ?? existing.ApprovedBy 
+//         },
+//       });
+
+//       await tx.wallet.update({
+//         where: { id: existing.walletId },
+//         data: { netAssetValue: { increment: existing.amount } },
+//       });
+
+//       return row;
+//     });
+
+//     return res.status(200).json({ data: approved, error: null });
+//   } catch (error) {
+//     console.error("approveDeposit error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to approve deposit" });
+//   }
+// }
 export async function approveDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -799,6 +842,7 @@ export async function approveDeposit(req: Request, res: Response) {
     }
 
     const approved = await db.$transaction(async (tx) => {
+      // 1. Update deposit status
       const row = await tx.deposit.update({
         where: { id },
         data: { 
@@ -807,10 +851,77 @@ export async function approveDeposit(req: Request, res: Response) {
         },
       });
 
-      await tx.wallet.update({
+      // 2. Update wallet and get new netAssetValue
+      const updatedWallet = await tx.wallet.update({
         where: { id: existing.walletId },
         data: { netAssetValue: { increment: existing.amount } },
+        select: { netAssetValue: true, userId: true }
       });
+
+      // 3. Get all user portfolios for this user with their assets
+      const userPortfolios = await tx.userPortfolio.findMany({
+        where: { userId: existing.userId },
+        include: {
+          userAssets: {
+            include: {
+              portfolioAsset: {
+                include: {
+                  asset: {
+                    select: {
+                      id: true,
+                      symbol: true,
+                      allocationPercentage: true,
+                      costPerShare: true,
+                      closePrice: true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // 4. Update each UserPortfolioAsset with recalculated values
+      for (const userPortfolio of userPortfolios) {
+        let totalPortfolioValue = 0;
+
+        for (const userAsset of userPortfolio.userAssets) {
+          const asset = userAsset.portfolioAsset.asset;
+          
+          // Calculate based on schema formulas:
+          // costPrice = asset.allocPercent × user.wallet.netAssetValue
+          const newCostPrice = (asset.allocationPercentage / 100) * updatedWallet.netAssetValue;
+          
+          // stock = costPrice ÷ asset.costPerShare
+          const newStock = asset.costPerShare > 0 ? newCostPrice / asset.costPerShare : 0;
+          
+          // closeValue = asset.closePrice × stock
+          const newCloseValue = asset.closePrice * newStock;
+          
+          // lossGain = closeValue - costPrice
+          const newLossGain = newCloseValue - newCostPrice;
+
+          // Update the UserPortfolioAsset
+          await tx.userPortfolioAsset.update({
+            where: { id: userAsset.id },
+            data: {
+              costPrice: newCostPrice,
+              stock: newStock,
+              closeValue: newCloseValue,
+              lossGain: newLossGain,
+            }
+          });
+
+          totalPortfolioValue += newCloseValue;
+        }
+
+        // 5. Update UserPortfolio.portfolioValue (sum of all closeValues)
+        await tx.userPortfolio.update({
+          where: { id: userPortfolio.id },
+          data: { portfolioValue: totalPortfolioValue }
+        });
+      }
 
       return row;
     });
