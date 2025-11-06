@@ -28,17 +28,7 @@ const SORTABLE_FIELDS = new Set<keyof Prisma.AssetOrderByWithRelationInput>([
   "updatedAt",
 ]);
 
-/* ------------------------------- LIST ------------------------------ */
-/**
- * GET /assets
- * Query:
- *  - q?: string (search symbol/description/sector)
- *  - sector?: string
- *  - page?: number (default 1)
- *  - pageSize?: number (default 20, max 100)
- *  - sortBy?: "symbol"|"sector"|... (see SORTABLE_FIELDS)
- *  - order?: "asc"|"desc"
- */
+
 export async function listAssets(req: Request, res: Response) {
   try {
     const q = (req.query.q as string) || "";
@@ -167,15 +157,72 @@ export async function createAsset(req: Request, res: Response) {
   }
 }
 
-/* ------------------------------ UPDATE ----------------------------- */
-/** PATCH /assets/:id
- * Body: partial fields (symbol, description, sector, allocationPercentage, costPerShare, closePrice)
- */
+
+// export async function updateAsset(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     const exists = await db.asset.findUnique({ where: { id } });
+//     if (!exists) return res.status(404).json({ data: null, error: "Asset not found" });
+
+//     const {
+//       symbol,
+//       description,
+//       sector,
+//       allocationPercentage,
+//       costPerShare,
+//       closePrice,
+//     } = req.body as Partial<{
+//       symbol: string;
+//       description: string;
+//       sector: string;
+//       allocationPercentage: number | string;
+//       costPerShare: number | string;
+//       closePrice: number | string;
+//     }>;
+
+//     const data: Prisma.AssetUpdateInput = {};
+
+//     if (symbol !== undefined) {
+//       const sym = normalizeSymbol(symbol);
+//       if (!sym) return res.status(400).json({ data: null, error: "symbol cannot be empty" });
+//       data.symbol = sym;
+//     }
+//     if (description !== undefined) {
+//       if (!description) return res.status(400).json({ data: null, error: "description cannot be empty" });
+//       data.description = description;
+//     }
+//     if (sector !== undefined) {
+//       if (!sector) return res.status(400).json({ data: null, error: "sector cannot be empty" });
+//       data.sector = sector;
+//     }
+//     if (allocationPercentage !== undefined) {
+//       data.allocationPercentage = clamp(num(allocationPercentage, 0), 0, 100);
+//     }
+//     if (costPerShare !== undefined) {
+//       data.costPerShare = Math.max(0, num(costPerShare, 0));
+//     }
+//     if (closePrice !== undefined) {
+//       data.closePrice = Math.max(0, num(closePrice, 0));
+//     }
+
+//     const updated = await db.asset.update({ where: { id }, data });
+//     return res.status(200).json({ data: updated, error: null });
+//   } catch (error: any) {
+//     if (error?.code === "P2002") {
+//       return res.status(409).json({ data: null, error: "Asset symbol already exists" });
+//     }
+//     console.error("updateAsset error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to update asset" });
+//   }
+// }
+
+
 export async function updateAsset(req: Request, res: Response) {
   try {
-    const { id } = req.params;
-    const exists = await db.asset.findUnique({ where: { id } });
-    if (!exists) return res.status(404).json({ data: null, error: "Asset not found" });
+    const { id } = req.params
+
+    const exists = await db.asset.findUnique({ where: { id } })
+    if (!exists) return res.status(404).json({ data: null, error: "Asset not found" })
 
     const {
       symbol,
@@ -185,47 +232,155 @@ export async function updateAsset(req: Request, res: Response) {
       costPerShare,
       closePrice,
     } = req.body as Partial<{
-      symbol: string;
-      description: string;
-      sector: string;
-      allocationPercentage: number | string;
-      costPerShare: number | string;
-      closePrice: number | string;
-    }>;
+      symbol: string
+      description: string
+      sector: string
+      allocationPercentage: number | string
+      costPerShare: number | string
+      closePrice: number | string
+    }>
 
-    const data: Prisma.AssetUpdateInput = {};
+    const patch: Prisma.AssetUpdateInput = {}
 
     if (symbol !== undefined) {
-      const sym = normalizeSymbol(symbol);
-      if (!sym) return res.status(400).json({ data: null, error: "symbol cannot be empty" });
-      data.symbol = sym;
+      const sym = normalizeSymbol(symbol)
+      if (!sym) return res.status(400).json({ data: null, error: "symbol cannot be empty" })
+      patch.symbol = sym
     }
     if (description !== undefined) {
-      if (!description) return res.status(400).json({ data: null, error: "description cannot be empty" });
-      data.description = description;
+      if (!description) return res.status(400).json({ data: null, error: "description cannot be empty" })
+      patch.description = description
     }
     if (sector !== undefined) {
-      if (!sector) return res.status(400).json({ data: null, error: "sector cannot be empty" });
-      data.sector = sector;
+      if (!sector) return res.status(400).json({ data: null, error: "sector cannot be empty" })
+      patch.sector = sector
     }
     if (allocationPercentage !== undefined) {
-      data.allocationPercentage = clamp(num(allocationPercentage, 0), 0, 100);
+      patch.allocationPercentage = clamp(num(allocationPercentage, 0), 0, 100)
     }
     if (costPerShare !== undefined) {
-      data.costPerShare = Math.max(0, num(costPerShare, 0));
+      patch.costPerShare = Math.max(0, num(costPerShare, 0))
     }
     if (closePrice !== undefined) {
-      data.closePrice = Math.max(0, num(closePrice, 0));
+      patch.closePrice = Math.max(0, num(closePrice, 0))
     }
 
-    const updated = await db.asset.update({ where: { id }, data });
-    return res.status(200).json({ data: updated, error: null });
+    // Nothing to update?
+    if (Object.keys(patch).length === 0) {
+      return res.status(200).json({ data: exists, error: null })
+    }
+
+    const updated = await db.$transaction(async (tx) => {
+      // 1) update the asset itself
+      const asset = await tx.asset.update({ where: { id }, data: patch })
+
+      // 2) do we need cascades?
+      const shouldCascade =
+        "allocationPercentage" in patch ||
+        "costPerShare" in patch ||
+        "closePrice" in patch
+
+      if (!shouldCascade) return asset
+
+      // 3) load related portfolio assets -> user assets -> user portfolio -> wallet
+      const portfolioAssets = await tx.portfolioAsset.findMany({
+        where: { assetId: id },
+        include: {
+          userAssets: {
+            include: {
+              userPortfolio: {
+                include: {
+                  user: { include: { wallet: true } },
+                },
+              },
+            },
+          },
+        },
+      })
+
+      // --- helpers ---
+      const paUpdatesFor = (pa: any) => {
+        if (patch.closePrice === undefined) return null
+        const closeValue = Number(patch.closePrice) * Number(pa.stock)
+        return {
+          closeValue,
+          lossGain: closeValue - Number(pa.costPrice),
+        }
+      }
+
+      const uaUpdatesFor = (ua: any) => {
+        const updates: any = {}
+
+        // allocation% affects UA.costPrice (based on user's wallet NAV)
+        if (patch.allocationPercentage !== undefined && ua.userPortfolio.user.wallet) {
+          const nav = Number(ua.userPortfolio.user.wallet.netAssetValue ?? 0)
+          updates.costPrice = (Number(patch.allocationPercentage) / 100) * nav
+        }
+
+        // costPerShare -> stock (using latest costPrice)
+        if (patch.costPerShare !== undefined) {
+          const cps = Number(patch.costPerShare)
+          const costPriceToUse = updates.costPrice ?? Number(ua.costPrice)
+          updates.stock = cps > 0 ? costPriceToUse / cps : 0
+        }
+
+        // closePrice -> closeValue/lossGain (using latest stock & costPrice)
+        if (patch.closePrice !== undefined) {
+          const stockToUse = updates.stock ?? Number(ua.stock)
+          const costPriceToUse = updates.costPrice ?? Number(ua.costPrice)
+          const closeValue = Number(patch.closePrice) * stockToUse
+          updates.closeValue = closeValue
+          updates.lossGain = closeValue - costPriceToUse
+        }
+
+        return Object.keys(updates).length ? updates : null
+      }
+      // ---------------
+
+      // 4) apply recalcs
+      const affectedUserPortfolioIds = new Set<string>()
+
+      for (const pa of portfolioAssets) {
+        const paUpd = paUpdatesFor(pa)
+        if (paUpd) {
+          await tx.portfolioAsset.update({ where: { id: pa.id }, data: paUpd })
+        }
+
+        for (const ua of pa.userAssets) {
+          const uaUpd = uaUpdatesFor(ua)
+          if (uaUpd) {
+            await tx.userPortfolioAsset.update({ where: { id: ua.id }, data: uaUpd })
+            affectedUserPortfolioIds.add(ua.userPortfolio.id)
+          }
+        }
+      }
+
+      // 5) recompute each affected userPortfolio.portfolioValue = sum(userAssets.closeValue)
+      if (affectedUserPortfolioIds.size) {
+        const ids = Array.from(affectedUserPortfolioIds)
+        for (const upId of ids) {
+          const rows = await tx.userPortfolioAsset.findMany({
+            where: { userPortfolioId: upId },
+            select: { closeValue: true },
+          })
+          const total = rows.reduce((s, r) => s + Number(r.closeValue ?? 0), 0)
+          await tx.userPortfolio.update({
+            where: { id: upId },
+            data: { portfolioValue: total },
+          })
+        }
+      }
+
+      return asset
+    })
+
+    return res.status(200).json({ data: updated, error: null })
   } catch (error: any) {
     if (error?.code === "P2002") {
-      return res.status(409).json({ data: null, error: "Asset symbol already exists" });
+      return res.status(409).json({ data: null, error: "Asset symbol already exists" })
     }
-    console.error("updateAsset error:", error);
-    return res.status(500).json({ data: null, error: "Failed to update asset" });
+    console.error("updateAsset error:", error)
+    return res.status(500).json({ data: null, error: "Failed to update asset" })
   }
 }
 

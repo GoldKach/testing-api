@@ -290,6 +290,13 @@ model Withdrawal {
   referenceNo String
   transactionId String? @unique
   method      String?
+   approvedById      String?          // e.g., admin user id
+  approvedByName    String?          // e.g., "Jane Admin"
+  approvedAt        DateTime?
+  rejectedById      String?
+  rejectedByName    String?
+  rejectedAt        DateTime?
+  rejectReason      String?
   bankName    String
   bankAccountName String
   bankBranch   String

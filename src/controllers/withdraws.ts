@@ -289,49 +289,272 @@ export async function updateWithdrawal(req: Request, res: Response) {
  * - Deducts wallet.netAssetValue by amount in a single transaction
  * - Validates sufficient balance
  */
+// export async function approveWithdrawal(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     const { transactionId } = req.body as { transactionId?: string | null };
+
+//     const result = await db.$transaction(async (tx) => {
+//       const row = await tx.withdrawal.findUnique({ where: { id }, include: { wallet: true } });
+//       if (!row) throw new Error("NOT_FOUND");
+//       if (row.transactionStatus !== "PENDING") throw new Error("NOT_PENDING");
+
+//       const wallet = await tx.wallet.findUnique({ where: { id: row.walletId } });
+//       if (!wallet) throw new Error("WALLET_NOT_FOUND");
+
+//       const balance = num((wallet as any).netAssetValue, NaN);
+//       if (!Number.isFinite(balance)) throw new Error("WALLET_BALANCE_INVALID");
+//       if (balance < row.amount) throw new Error("INSUFFICIENT_FUNDS");
+
+//       await tx.wallet.update({
+//         where: { id: wallet.id },
+//         data: { netAssetValue: balance - row.amount },
+//       });
+
+//       const updatedWithdrawal = await tx.withdrawal.update({
+//         where: { id },
+//         data: {
+//           transactionStatus: "APPROVED",
+//           ...(transactionId !== undefined ? { transactionId } : {}),
+//         },
+//       });
+
+//       return updatedWithdrawal;
+//     });
+
+//     return res.status(200).json({ data: result, error: null });
+//   } catch (error: any) {
+//     const msg = String(error?.message || "");
+//     if (msg === "NOT_FOUND") return res.status(404).json({ data: null, error: "Withdrawal not found" });
+//     if (msg === "NOT_PENDING") return res.status(409).json({ data: null, error: "Only PENDING can be approved" });
+//     if (msg === "WALLET_NOT_FOUND") return res.status(404).json({ data: null, error: "Wallet not found" });
+//     if (msg === "WALLET_BALANCE_INVALID") return res.status(500).json({ data: null, error: "Wallet balance invalid" });
+//     if (msg === "INSUFFICIENT_FUNDS") return res.status(400).json({ data: null, error: "Insufficient wallet balance" });
+
+//     if (error?.code === "P2002") {
+//       return res.status(409).json({ data: null, error: "Duplicate transactionId" });
+//     }
+//     console.error("approveWithdrawal error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to approve withdrawal" });
+//   }
+// }
+
+
+
+async function recomputeUserPortfoliosFromNav(
+  tx: Prisma.TransactionClient,
+  params: { userId: string; walletNetAssetValue: number }
+) {
+  const { userId, walletNetAssetValue } = params;
+
+  const userPortfolios = await tx.userPortfolio.findMany({
+    where: { userId },
+    include: {
+      userAssets: {
+        include: {
+          portfolioAsset: {
+            include: {
+              asset: {
+                select: {
+                  id: true,
+                  symbol: true,
+                  allocationPercentage: true,
+                  costPerShare: true,
+                  closePrice: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  for (const userPortfolio of userPortfolios) {
+    let totalPortfolioValue = 0;
+
+    for (const userAsset of userPortfolio.userAssets) {
+      const asset = userAsset.portfolioAsset.asset;
+
+      // === Same formulas as approveDeposit ===
+      // costPrice = alloc% * wallet.netAssetValue
+      const costPrice =
+        (asset.allocationPercentage / 100) * walletNetAssetValue;
+
+      // stock = costPrice / costPerShare
+      const stock = asset.costPerShare > 0 ? costPrice / asset.costPerShare : 0;
+
+      // closeValue = closePrice * stock
+      const closeValue = asset.closePrice * stock;
+
+      // lossGain = closeValue - costPrice
+      const lossGain = closeValue - costPrice;
+
+      await tx.userPortfolioAsset.update({
+        where: { id: userAsset.id },
+        data: { costPrice, stock, closeValue, lossGain },
+      });
+
+      totalPortfolioValue += closeValue;
+    }
+
+    await tx.userPortfolio.update({
+      where: { id: userPortfolio.id },
+      data: { portfolioValue: totalPortfolioValue },
+    });
+  }
+}
+
+/** POST /withdrawals/:id/approve — mirror approveDeposit, but deduct NAV */
+// export async function approveWithdrawal(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     const { ApprovedBy } = req.body as { ApprovedBy?: string };
+
+//     const existing = await db.withdrawal.findUnique({ where: { id } });
+//     if (!existing)
+//       return res
+//         .status(404)
+//         .json({ data: null, error: "Withdrawal not found" });
+
+//     // If already approved, return it (idempotent)
+//     if (existing.transactionStatus === "APPROVED") {
+//       return res.status(200).json({ data: existing, error: null });
+//     }
+
+//     // Don't allow approving rejected withdrawals
+//     if (existing.transactionStatus === "REJECTED") {
+//       return res
+//         .status(409)
+//         .json({ data: null, error: "Cannot approve a rejected withdrawal" });
+//     }
+
+//     // Validate funds before opening a transaction (quick fail)
+//     const wallet = await db.wallet.findUnique({
+//       where: { id: existing.walletId },
+//       select: { id: true, netAssetValue: true },
+//     });
+//     if (!wallet) {
+//       return res
+//         .status(404)
+//         .json({ data: null, error: "Wallet not found" });
+//     }
+//     if (wallet.netAssetValue < existing.amount) {
+//       return res
+//         .status(400)
+//         .json({ data: null, error: "Insufficient wallet balance" });
+//     }
+
+//     const approved = await db.$transaction(async (tx) => {
+//       // 1) Mark withdrawal approved
+//       const row = await tx.withdrawal.update({
+//         where: { id },
+//         data: {
+//           transactionStatus: "APPROVED",
+//           // ApprovedBy: ApprovedBy ?? existing.ApprovedBy,
+//         },
+//       });
+
+//       // 2) Deduct wallet NAV
+//       const updatedWallet = await tx.wallet.update({
+//         where: { id: existing.walletId },
+//         data: { netAssetValue: { decrement: existing.amount } },
+//         select: { netAssetValue: true },
+//       });
+
+//       // 3) Recompute all user portfolio assets & portfolio values (same formulas as deposit)
+//       await recomputeUserPortfoliosFromNav(tx, {
+//         userId: existing.userId,
+//         walletNetAssetValue: updatedWallet.netAssetValue,
+//       });
+
+//       return row;
+//     });
+
+//     return res.status(200).json({ data: approved, error: null });
+//   } catch (error) {
+//     console.error("approveWithdrawal error:", error);
+//     return res
+//       .status(500)
+//       .json({ data: null, error: "Failed to approve withdrawal" });
+//   }
+// }
+
+/** POST /withdrawals/:id/approve
+ * Body: { approvedById?: string; approvedByName?: string }
+ * - PENDING -> APPROVED
+ * - Deducts wallet.netAssetValue
+ * - Recomputes user portfolios
+ * - Stores approver + approvedAt
+ */
 export async function approveWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { transactionId } = req.body as { transactionId?: string | null };
+    const {
+      approvedById,
+      transactionId,            // REQUIRED now
+      approvedByName,
+    } = (req.body ?? {}) as { approvedById?: string; approvedByName?: string;transactionId?: string };
 
-    const result = await db.$transaction(async (tx) => {
-      const row = await tx.withdrawal.findUnique({ where: { id }, include: { wallet: true } });
-      if (!row) throw new Error("NOT_FOUND");
-      if (row.transactionStatus !== "PENDING") throw new Error("NOT_PENDING");
+        if (!transactionId || !String(transactionId).trim()) {
+      return res.status(400).json({ data: null, error: "transactionId is required to approve" });
+    }
 
-      const wallet = await tx.wallet.findUnique({ where: { id: row.walletId } });
-      if (!wallet) throw new Error("WALLET_NOT_FOUND");
+    const existing = await db.withdrawal.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ data: null, error: "Withdrawal not found" });
 
-      const balance = num((wallet as any).netAssetValue, NaN);
-      if (!Number.isFinite(balance)) throw new Error("WALLET_BALANCE_INVALID");
-      if (balance < row.amount) throw new Error("INSUFFICIENT_FUNDS");
+    if (existing.transactionStatus === "APPROVED") {
+      // idempotent
+      return res.status(200).json({ data: existing, error: null });
+    }
+    if (existing.transactionStatus === "REJECTED") {
+      return res.status(409).json({ data: null, error: "Cannot approve a rejected withdrawal" });
+    }
 
-      await tx.wallet.update({
-        where: { id: wallet.id },
-        data: { netAssetValue: balance - row.amount },
-      });
+    // pre-check funds
+    const wallet = await db.wallet.findUnique({
+      where: { id: existing.walletId },
+      select: { id: true, netAssetValue: true },
+    });
+    if (!wallet) return res.status(404).json({ data: null, error: "Wallet not found" });
+    if (wallet.netAssetValue < existing.amount) {
+      return res.status(400).json({ data: null, error: "Insufficient wallet balance" });
+    }
 
+    const approved = await db.$transaction(async (tx) => {
+      // 1) mark approved + audit
       const updatedWithdrawal = await tx.withdrawal.update({
         where: { id },
         data: {
           transactionStatus: "APPROVED",
-          ...(transactionId !== undefined ? { transactionId } : {}),
+          transactionId: String(transactionId).trim(), // set it here
+          approvedById: approvedById ?? null,
+          approvedByName: approvedByName ?? null,
+          approvedAt: new Date(),
+          // keep existing.transactionId as-is; set it elsewhere if you assign at approval time
         },
+      });
+
+      // 2) deduct wallet NAV
+      const updatedWallet = await tx.wallet.update({
+        where: { id: existing.walletId },
+        data: { netAssetValue: { decrement: existing.amount } },
+        select: { netAssetValue: true },
+      });
+
+      // 3) recompute portfolios based on new NAV
+      await recomputeUserPortfoliosFromNav(tx, {
+        userId: existing.userId,
+        walletNetAssetValue: updatedWallet.netAssetValue,
       });
 
       return updatedWithdrawal;
     });
 
-    return res.status(200).json({ data: result, error: null });
+    return res.status(200).json({ data: approved, error: null });
   } catch (error: any) {
-    const msg = String(error?.message || "");
-    if (msg === "NOT_FOUND") return res.status(404).json({ data: null, error: "Withdrawal not found" });
-    if (msg === "NOT_PENDING") return res.status(409).json({ data: null, error: "Only PENDING can be approved" });
-    if (msg === "WALLET_NOT_FOUND") return res.status(404).json({ data: null, error: "Wallet not found" });
-    if (msg === "WALLET_BALANCE_INVALID") return res.status(500).json({ data: null, error: "Wallet balance invalid" });
-    if (msg === "INSUFFICIENT_FUNDS") return res.status(400).json({ data: null, error: "Insufficient wallet balance" });
-
     if (error?.code === "P2002") {
+      // if you ever set/modify unique transactionId at approve-time
       return res.status(409).json({ data: null, error: "Duplicate transactionId" });
     }
     console.error("approveWithdrawal error:", error);
@@ -339,14 +562,23 @@ export async function approveWithdrawal(req: Request, res: Response) {
   }
 }
 
+
 /* -------------------------------- REJECT ----------------------------------- */
 /** POST /withdrawals/:id/reject
  * - Moves PENDING -> REJECTED
  * - No wallet changes
  */
+
+/** POST /withdrawals/:id/reject
+ * Body: { rejectedById?: string; rejectedByName?: string; reason?: string }
+ * - PENDING -> REJECTED
+ * - Stores rejector + reason + rejectedAt
+ */
 export async function rejectWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    const { rejectedById, rejectedByName, reason } =
+      (req.body ?? {}) as { rejectedById?: string; rejectedByName?: string; reason?: string };
 
     const row = await db.withdrawal.findUnique({ where: { id } });
     if (!row) return res.status(404).json({ data: null, error: "Withdrawal not found" });
@@ -356,7 +588,13 @@ export async function rejectWithdrawal(req: Request, res: Response) {
 
     const updated = await db.withdrawal.update({
       where: { id },
-      data: { transactionStatus: "REJECTED" },
+      data: {
+        transactionStatus: "REJECTED",
+        rejectedById: rejectedById ?? null,
+        rejectedByName: rejectedByName ?? null,
+        rejectedAt: new Date(),
+        rejectReason: reason ?? null,
+      },
     });
 
     return res.status(200).json({ data: updated, error: null });
@@ -365,6 +603,31 @@ export async function rejectWithdrawal(req: Request, res: Response) {
     return res.status(500).json({ data: null, error: "Failed to reject withdrawal" });
   }
 }
+
+
+
+
+// export async function rejectWithdrawal(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+
+//     const row = await db.withdrawal.findUnique({ where: { id } });
+//     if (!row) return res.status(404).json({ data: null, error: "Withdrawal not found" });
+//     if (row.transactionStatus !== "PENDING") {
+//       return res.status(409).json({ data: null, error: "Only PENDING can be rejected" });
+//     }
+
+//     const updated = await db.withdrawal.update({
+//       where: { id },
+//       data: { transactionStatus: "REJECTED" },
+//     });
+
+//     return res.status(200).json({ data: updated, error: null });
+//   } catch (error) {
+//     console.error("rejectWithdrawal error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to reject withdrawal" });
+//   }
+// }
 
 /* -------------------------------- DELETE ----------------------------------- */
 /** DELETE /withdrawals/:id
