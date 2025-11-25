@@ -271,54 +271,103 @@ export async function listUserPortfolios(req: Request, res: Response) {
 
 
 // actions/user-portfolios.ts
-export async function getUserPortfolioById(id: string) {
+// export async function getUserPortfolioById(id: string) {
+//   try {
+//     // Try to find by UserPortfolio ID first
+//     let portfolio = await db.userPortfolio.findUnique({
+//       where: { id },
+//       include: {
+//         user: { include: { wallet: true } },
+//         portfolio: { include: { assets: { include: { asset: true } } } },
+//         userAssets: {
+//           include: {
+//             portfolioAsset: {
+//               include: {
+//                 asset: true
+//               }
+//             }
+//           }
+//         },
+//       },
+//     });
+
+//     // If not found, try finding by portfolioId
+//     if (!portfolio) {
+//       portfolio = await db.userPortfolio.findFirst({
+//         where: { portfolioId: id },
+//         include: {
+//           user: { include: { wallet: true } },
+//           portfolio: { include: { assets: { include: { asset: true } } } },
+//           userAssets: {
+//             include: {
+//               portfolioAsset: {
+//                 include: {
+//                   asset: true
+//                 }
+//               }
+//             }
+//           },
+//         },
+//       });
+//     }
+
+//     if (!portfolio) {
+//       return { data: null, error: "Portfolio not found" };
+//     }
+
+//     return { data: portfolio, error: null };
+//   } catch (err) {
+//     console.error("getUserPortfolioById error:", err);
+//     return { data: null, error: "Failed to load portfolio." };
+//   }
+// }
+
+
+/* --------------------------------------------
+   GET BY ID (GET /user-portfolios/:id)
+--------------------------------------------- */
+export async function getUserPortfolioById(req: Request, res: Response) {
   try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ data: null, error: "Missing id." });
+
+    const include = parseInclude(req.query) ?? {
+      user: { include: { wallet: true } },
+      portfolio: { include: { assets: { include: { asset: true } } } },
+      userAssets: {
+        include: {
+          portfolioAsset: {
+            include: {
+              asset: true,
+              portfolio: true
+            }
+          }
+        }
+      },
+    };
+
     // Try to find by UserPortfolio ID first
     let portfolio = await db.userPortfolio.findUnique({
       where: { id },
-      include: {
-        user: { include: { wallet: true } },
-        portfolio: { include: { assets: { include: { asset: true } } } },
-        userAssets: {
-          include: {
-            portfolioAsset: {
-              include: {
-                asset: true
-              }
-            }
-          }
-        },
-      },
+      include,
     });
 
     // If not found, try finding by portfolioId
     if (!portfolio) {
       portfolio = await db.userPortfolio.findFirst({
         where: { portfolioId: id },
-        include: {
-          user: { include: { wallet: true } },
-          portfolio: { include: { assets: { include: { asset: true } } } },
-          userAssets: {
-            include: {
-              portfolioAsset: {
-                include: {
-                  asset: true
-                }
-              }
-            }
-          },
-        },
+        include,
       });
     }
 
     if (!portfolio) {
-      return { data: null, error: "Portfolio not found" };
+      return res.status(404).json({ data: null, error: "Portfolio not found" });
     }
 
-    return { data: portfolio, error: null };
+    return res.status(200).json({ data: portfolio, error: null });
   } catch (err) {
     console.error("getUserPortfolioById error:", err);
-    return { data: null, error: "Failed to load portfolio." };
+    return res.status(500).json({ data: null, error: "Failed to load user portfolio." });
   }
 }
 

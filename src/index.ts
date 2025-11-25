@@ -10,6 +10,8 @@ import portfolioAssetRouter from "./routes/portfolio-assets";
 import userPortfolioRouter from "./routes/userportfolio";
 import depositsRouter from "./routes/deposits";
 import withdrawalsRouter from "./routes/withdraws";
+import portfolioPerformanceReportsRouter from "./routes/portfolio-performance-reports";
+import { startPortfolioReportCronFromEnv } from "./jobs/portfolio-report-generator-2min";
 const cors = require("cors");
 
 const app = express();
@@ -20,6 +22,8 @@ const PORT = process.env.PORT || 8000;
 
 app.use(express.json());
 app.listen(PORT, () => {
+    startPortfolioReportCronFromEnv();
+
   console.log(`Server is running on http://localhost:${PORT}`); 
 });
 
@@ -32,3 +36,4 @@ app.use("/api/v1", portfolioAssetRouter);
 app.use("/api/v1", userPortfolioRouter);
 app.use("/api/v1", depositsRouter);
 app.use("/api/v1", withdrawalsRouter);
+app.use("/api/v1", portfolioPerformanceReportsRouter);

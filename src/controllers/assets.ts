@@ -109,12 +109,16 @@ export async function getAssetBySymbol(req: Request, res: Response) {
 /** POST /assets
  * Body: { symbol, description, sector, allocationPercentage?, costPerShare?, closePrice? }
  */
+/** POST /assets
+ * Body: { symbol, description, sector, assetClass?, allocationPercentage?, costPerShare?, closePrice? }
+ */
 export async function createAsset(req: Request, res: Response) {
   try {
     const {
       symbol,
       description,
       sector,
+      assetClass,
       allocationPercentage,
       costPerShare,
       closePrice,
@@ -122,40 +126,62 @@ export async function createAsset(req: Request, res: Response) {
       symbol: string;
       description: string;
       sector: string;
+      assetClass?: "EQUITIES" | "ETFS" | "REITS" | "BONDS" | "CASH" | "OTHERS";
       allocationPercentage?: number | string;
       costPerShare?: number | string;
       closePrice?: number | string;
     };
 
-    const sym = normalizeSymbol(symbol || "");
+    // --- VALIDATION ---
+    const sym = symbol?.trim()?.toUpperCase();
     if (!sym || !description || !sector) {
-      return res.status(400).json({ data: null, error: "symbol, description and sector are required" });
+      return res.status(400).json({
+        data: null,
+        error: "symbol, description, and sector are required",
+      });
     }
 
-    const alloc = clamp(num(allocationPercentage, 0), 0, 100);
-    const cps = Math.max(0, num(costPerShare, 0));
-    const close = Math.max(0, num(closePrice, 0));
+    const alloc = allocationPercentage
+      ? Math.min(Math.max(Number(allocationPercentage), 0), 100)
+      : 0;
 
+    const cps = costPerShare ? Math.max(0, Number(costPerShare)) : 0;
+    const close = closePrice ? Math.max(0, Number(closePrice)) : 0;
+
+    // --- CREATE ASSET ---
     const created = await db.asset.create({
       data: {
         symbol: sym,
-        description,
-        sector,
+        description: description.trim(),
+        sector: sector.trim(),
+        assetClass: assetClass ?? undefined, // <-- IMPORTANT: now saving correctly
         allocationPercentage: alloc,
         costPerShare: cps,
         closePrice: close,
       },
     });
 
-    return res.status(201).json({ data: created, error: null });
+    return res.status(201).json({
+      data: created,
+      error: null,
+    });
   } catch (error: any) {
-    if (error?.code === "P2002") {
-      return res.status(409).json({ data: null, error: "Asset symbol already exists" });
-    }
     console.error("createAsset error:", error);
-    return res.status(500).json({ data: null, error: "Failed to create asset" });
+
+    if (error?.code === "P2002") {
+      return res.status(409).json({
+        data: null,
+        error: "Asset symbol already exists",
+      });
+    }
+
+    return res.status(500).json({
+      data: null,
+      error: "Failed to create asset",
+    });
   }
 }
+
 
 
 // export async function updateAsset(req: Request, res: Response) {

@@ -1,14 +1,85 @@
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// =====================
+// Prisma Schema
+// =====================
+
 generator client {
   provider = "prisma-client-js"
 }
-
-// re_BpM46JvH_CaR1rdHpqLoXa2qMQkt2NmgG
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// =====================
+// Enums
+// =====================
+
+enum UserRole {
+  SUPER_ADMIN
+  MANAGER
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE          // normal active account
+  INACTIVE        // cannot login
+  PENDING         // awaiting email verification
+  SUSPENDED       // temporarily blocked
+  DEACTIVATED
+  BANNED
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  CLOSED
+  FROZEN
+}
+
+enum TransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AssetClass {
+  EQUITIES
+  ETFS
+  REITS
+  BONDS
+  CASH
+  OTHERS
+}
+
+// Enum for report periods
+enum ReportPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// =====================
+// Core Auth Models
+// =====================
 
 model Account {
   id                String  @id @default(cuid())
@@ -39,49 +110,35 @@ model Session {
 }
 
 model User {
- id            String    @id @default(cuid())
-  name          String
-  firstName     String
-  lastName      String
-  phone         String    @unique
-  email         String    @unique
-  emailVerified Boolean   @default(false)
-  password      String
-  imageUrl      String @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
-  role          UserRole  @default(USER)
-  status        UserStatus @default(PENDING)
-  accounts      Account[]
-  sessions      Session[]
-  resetTokens   PasswordResetToken[]
-  isApproved    Boolean   @default(false)
-  token         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  roleId        String?
+  id             String      @id @default(cuid())
+  name           String
+  firstName      String
+  lastName       String
+  phone          String      @unique
+  email          String      @unique
+  emailVerified  Boolean     @default(false)
+  password       String
+  imageUrl       String      @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
+  role           UserRole    @default(USER)
+  status         UserStatus  @default(PENDING)
+  isApproved     Boolean     @default(false)
+  token          String?
+  roleId         String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  // Relations
+  accounts         Account[]
+  sessions         Session[]
+  resetTokens      PasswordResetToken[]
+  refreshTokens    RefreshToken[]
   entityOnboarding EntityOnboarding?
-  wallet             Wallet? // one-to-one relationship
-  deposits            Deposit[]
-  withdrawals         Withdrawal[]
-  portfolioSummary    PortfolioSummary[]
-   userPortfolios    UserPortfolio[]
-   activityLogs       ActivityLog[]
-  refreshTokens RefreshToken[]
-
-}
-
-enum UserRole {
-  SUPER_ADMIN  
-  MANAGER 
-  ADMIN                 
-  USER      
-}
-enum UserStatus {
-  ACTIVE            // normal active account
-  INACTIVE          // default, cannot login
-  PENDING           // awaiting email verification
-  SUSPENDED        // temporarily blocked
-  DEACTIVATED       
-  BANNED             
+  wallet           Wallet?
+  deposits         Deposit[]
+  withdrawals      Withdrawal[]
+  portfolioSummary PortfolioSummary[]
+  userPortfolios   UserPortfolio[]
+  activityLogs     ActivityLog[]
 }
 
 model RefreshToken {
@@ -97,271 +154,311 @@ model RefreshToken {
 }
 
 model PasswordResetToken {
-  id         String   @id @default(cuid())
-  userId     String
-  tokenHash  String   // store only the hash of the raw token
-  expiresAt  DateTime
-  usedAt     DateTime?
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   // store only the hash of the raw token
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@index([expiresAt])
 }
 
+// =====================
+// Onboarding / KYC
+// =====================
 
 model EntityOnboarding {
-  id                       String   @id @default(cuid())
-  entityType               String   // ideally enum: "individual" | "company"
-  fullName                 String
-   userId                   String   @unique
-  user                     User     @relation(fields: [userId], references: [id],onDelete: Cascade,onUpdate: Cascade)
-  dateOfBirth              DateTime
-  tin                      String @unique
-  avatarUrl                 String?
-  idUrl                     String?
-  homeAddress              String
-  email                    String
-  phoneNumber              String
-  employmentStatus         String
-  occupation               String
-  companyName              String?
-  hasBusiness              String?
-  registrationNumber       String?
-  companyAddress           String?
-  businessType             String?
-  incorporationDate        DateTime?
-  authorizedRepName        String?
-  isApproved            Boolean  @default(false)
-  authorizedRepEmail       String?
-  authorizedRepPhone       String?
-  authorizedRepPosition    String?
-  primaryGoal              String
-  timeHorizon              String
-  riskTolerance            String
-  investmentExperience     String
-  isPEP                    String   // ideally boolean or enum
-  consentToDataCollection  Boolean
-  agreeToTerms             Boolean
-  sourceOfWealth           String
-  businessOwnership        String
-  employmentIncome         String
-  expectedInvestment       String
-  businessName             String
-  businessAddress          String
-  establishmentDate        DateTime
-  ownershipPercentage      String
-  familyMemberDetails      String
-  publicPosition           String
-  relationshipToCountry    String
-  sanctionsOrLegal         String   // ideally boolean or enum
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                      String   @id @default(cuid())
+  entityType              String   // ideally enum: "individual" | "company"
+  fullName                String
+  userId                  String   @unique
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  dateOfBirth             DateTime
+  tin                     String   @unique
+  avatarUrl               String?
+  idUrl                   String?
+  homeAddress             String
+  email                   String
+  phoneNumber             String
+  employmentStatus        String
+  occupation              String
+  companyName             String?
+  hasBusiness             String?
+  registrationNumber      String?
+  companyAddress          String?
+  businessType            String?
+  incorporationDate       DateTime?
+  authorizedRepName       String?
+  isApproved              Boolean  @default(false)
+  authorizedRepEmail      String?
+  authorizedRepPhone      String?
+  authorizedRepPosition   String?
+  primaryGoal             String
+  timeHorizon             String
+  riskTolerance           String
+  investmentExperience    String
+  isPEP                   String   // ideally boolean or enum
+  consentToDataCollection Boolean
+  agreeToTerms            Boolean
+  sourceOfWealth          String
+  businessOwnership       String
+  employmentIncome        String
+  expectedInvestment      String
+  businessName            String
+  businessAddress         String
+  establishmentDate       DateTime
+  ownershipPercentage     String
+  familyMemberDetails     String
+  publicPosition          String
+  relationshipToCountry   String
+  sanctionsOrLegal        String   // ideally boolean or enum
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
+
+// =====================
+// Wallet & Cash Flows
+// =====================
 
 model Wallet {
-  id              String      @id @default(cuid())
-  accountNumber   String      @unique
-  userId          String @unique
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  balance              Float       @default(0.0)
-  bankFee              Float       @default(30)
-  transactionFee       Float       @default(10)
-  feeAtBank            Float       @default(10)
-  totalFees            Float @default(50.0)
-  netAssetValue        Float @default(0.0)
-  status          AccountStatus @default(ACTIVE)
-  deposits        Deposit[]
-  withdrawals     Withdrawal[]
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  id             String         @id @default(cuid())
+  accountNumber  String         @unique
+  userId         String         @unique
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  balance        Float          @default(0.0)
+  bankFee        Float          @default(30)
+  transactionFee Float          @default(10)
+  feeAtBank      Float          @default(10)
+  totalFees      Float          @default(50.0)
+  netAssetValue  Float          @default(0.0)
+  status         AccountStatus  @default(ACTIVE)
+  deposits       Deposit[]
+  withdrawals    Withdrawal[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 }
 
+model Deposit {
+  id               String            @id @default(cuid())
+  walletId         String
+  wallet           Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  amount           Float
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  transactionId    String?           @unique
+  transactionStatus TransactionStatus @default(PENDING)
+  mobileNo         String?
+  referenceNo      String?
+  AccountNo        String?
+  ApprovedBy       String?
+  method           String?
+  description      String?
+  createdAt        DateTime          @default(now())
+}
+
+model Withdrawal {
+  id                String            @id @default(cuid())
+  walletId          String
+  wallet            Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  amount            Float
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  transactionStatus TransactionStatus @default(PENDING)
+  AccountNo         String?
+  AccountName       String?
+  referenceNo       String
+  transactionId     String?           @unique
+  method            String?
+  approvedById      String?           // e.g., admin user id
+  approvedByName    String?           // e.g., "Jane Admin"
+  approvedAt        DateTime?
+  rejectedById      String?
+  rejectedByName    String?
+  rejectedAt        DateTime?
+  rejectReason      String?
+  bankName          String
+  bankAccountName   String
+  bankBranch        String
+  description       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+}
+
+// =====================
+// Assets & Portfolios
+// =====================
 
 model Asset {
   id                   String     @id @default(cuid())
   symbol               String     @unique
   description          String
   sector               String
-  allocationPercentage Float @default(0.0)
-  costPerShare         Float @default(0.0)
-  closePrice           Float @default(0.0)
+
+  // classification used in breakdown reports
+  assetClass           AssetClass @default(OTHERS)
+
+  allocationPercentage Float      @default(0.0)
+  costPerShare         Float      @default(0.0)
+  closePrice           Float      @default(0.0)
   portfolios           PortfolioAsset[]
   createdAt            DateTime   @default(now())
   updatedAt            DateTime   @updatedAt
 }
 
-
+model Portfolio {
+  id                  String           @id @default(cuid())
+  name                String           @unique
+  description         String?
+  timeHorizon         String
+  riskTolerance       String
+  allocationPercentage Float           @default(100)
+  assets              PortfolioAsset[]
+  userPortfolios      UserPortfolio[]
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+}
 
 model UserPortfolio {
-  id              String             @id @default(cuid())
-  userId          String
-  portfolioId     String
-  portfolioValue  Float              @default(0.0) 
-  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  portfolio       Portfolio          @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  userAssets      UserPortfolioAsset[]
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                 String                        @id @default(cuid())
+  userId             String
+  portfolioId        String
+  portfolioValue     Float                         @default(0.0)
+  user               User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio          Portfolio                     @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  userAssets         UserPortfolioAsset[]
+  createdAt          DateTime                      @default(now())
+  updatedAt          DateTime                      @updatedAt
+
+  // Performance reports for this user-portfolio
+  performanceReports UserPortfolioPerformanceReport[]
+
   @@unique([userId, portfolioId])
 }
 
-model Portfolio {
-  id          String           @id @default(cuid())
-  name        String           @unique
-  description String?
-  timeHorizon String
-  riskTolerance String
-  allocationPercentage  Float @default(100)
-  assets      PortfolioAsset[]
-  userPortfolios UserPortfolio[] // join table to users
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-}
-
-
-model PortfolioSummary {
-  id              String      @id @default(cuid())
-  cashAtBank       Float
-  userId          String
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  cashOutstanding Float
-  cashAvailable   Float
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-}
-
-model PortfolioAsset {
-  id          String     @id @default(cuid())
-  portfolioId String
-  assetId     String 
-  lossGain             Float @default(0.0)
-  closeValue           Float @default(0.0)
-  costPrice            Float @default(0.0)
-  stock                Float @default(0.0)
-  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  asset       Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  userAssets    UserPortfolioAsset[] 
-  @@unique([portfolioId, assetId]) // prevent duplicate assignments
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
-}
-
 model UserPortfolioAsset {
-  id                String     @id @default(cuid())
-  userPortfolioId   String
-  portfolioAssetId  String
-  costPrice         Float      @default(0.0) // = asset.allocPercent × user.wallet.netAssetValue
-  stock             Float      @default(0.0) // = costPrice ÷ asset.costPerShare
-  closeValue        Float      @default(0.0) // = asset.closePrice × stock
-  lossGain          Float      @default(0.0) // = closeValue - costPrice
-  userPortfolio     UserPortfolio   @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
-  portfolioAsset    PortfolioAsset  @relation(fields: [portfolioAssetId], references: [id], onDelete: Cascade)
+  id               String          @id @default(cuid())
+  userPortfolioId  String
+  portfolioAssetId String
+  costPrice        Float           @default(0.0) // = asset.allocPercent × user.wallet.netAssetValue
+  stock            Float           @default(0.0) // = costPrice ÷ asset.costPerShare
+  closeValue       Float           @default(0.0) // = asset.closePrice × stock
+  lossGain         Float           @default(0.0) // = closeValue - costPrice
+
+  userPortfolio  UserPortfolio  @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  portfolioAsset PortfolioAsset @relation(fields: [portfolioAssetId], references: [id], onDelete: Cascade)
+
   @@unique([userPortfolioId, portfolioAssetId])
 }
 
-model Deposit {
-  id          String   @id @default(cuid())
-  walletId   String
-  wallet     Wallet  @relation(fields: [walletId], references: [id], onDelete: Cascade,onUpdate: Cascade)
-  amount      Float
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  transactionId String? @unique
-  transactionStatus transactionStatus @default(PENDING)
-  mobileNo    String?
-  referenceNo String?
-  AccountNo  String?
-   ApprovedBy String? 
-  method      String?
-  description String?
-  createdAt   DateTime @default(now())
+model PortfolioAsset {
+  id           String             @id @default(cuid())
+  portfolioId  String
+  assetId      String
+  lossGain     Float              @default(0.0)
+  closeValue   Float              @default(0.0)
+  costPrice    Float              @default(0.0)
+  stock        Float              @default(0.0)
+
+  portfolio    Portfolio          @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  asset        Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  userAssets   UserPortfolioAsset[]
+
+  @@unique([portfolioId, assetId])
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
 }
 
-model Withdrawal {
-  id          String   @id @default(cuid())
-  walletId   String
-  wallet     Wallet  @relation(fields: [walletId], references: [id], onDelete: Cascade,onUpdate: Cascade)
-  amount      Float
+model PortfolioSummary {
+  id              String   @id @default(cuid())
+  cashAtBank      Float
   userId          String
-  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  transactionStatus transactionStatus @default(PENDING) 
-  AccountNo  String?
-  AccountName  String?
-  referenceNo String
-  transactionId String? @unique
-  method      String?
-   approvedById      String?          // e.g., admin user id
-  approvedByName    String?          // e.g., "Jane Admin"
-  approvedAt        DateTime?
-  rejectedById      String?
-  rejectedByName    String?
-  rejectedAt        DateTime?
-  rejectReason      String?
-  bankName    String
-  bankAccountName String
-  bankBranch   String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime         @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashOutstanding Float
+  cashAvailable   Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
+// =====================
+// Activity Logging
+// =====================
 
 model ActivityLog {
-  id             String   @id @default(cuid())
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  action         String
-  module         String?   // e.g., "wallet", "portfolio", "auth"
-  status         String?   // e.g., "SUCCESS", "FAILED"
-  description    String?
-  method         String?   // e.g., "POST", "GET", "WITHDRAW"
-  platform       String?   // e.g., "web", "mobile", "api"
-  performedByRole String?  // from user.roles
-  entityId       String?
-  entityType     String?   // e.g., "Deposit", "Withdrawal"
-  referrerUrl    String?
-  ipAddress      String?
-  userAgent      String?
-  location       String?
-  isAutomated    Boolean?  @default(false)
-  durationMs     Int?
-  errorMessage   String?
-  metadata       Json?
-  createdAt      DateTime  @default(now())
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action          String
+  module          String?   // e.g., "wallet", "portfolio", "auth"
+  status          String?   // e.g., "SUCCESS", "FAILED"
+  description     String?
+  method          String?   // e.g., "POST", "GET", "WITHDRAW"
+  platform        String?   // e.g., "web", "mobile", "api"
+  performedByRole String?   // from user.roles
+  entityId        String?
+  entityType      String?   // e.g., "Deposit", "Withdrawal"
+  referrerUrl     String?
+  ipAddress       String?
+  userAgent       String?
+  location        String?
+  isAutomated     Boolean?  @default(false)
+  durationMs      Int?
+  errorMessage    String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
 
   @@index([userId, action, createdAt])
 }
 
+// =====================
+// Performance Reports
+// =====================
 
-enum AccountStatus {
-  ACTIVE
-  INACTIVE
-  CLOSED
-  FROZEN
+model UserPortfolioPerformanceReport {
+  id              String       @id @default(cuid())
+  userPortfolioId String
+  reportDate      DateTime     @default(now())
+
+  // Period this report covers (daily/weekly/monthly)
+  period          ReportPeriod @default(DAILY)
+
+  // Portfolio totals
+  totalCostPrice  Float        @default(0)
+  totalCloseValue Float        @default(0)
+  totalLossGain   Float        @default(0)
+  totalPercentage Float        @default(0)
+
+  // Relations
+  userPortfolio  UserPortfolio           @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  assetBreakdown PortfolioAssetBreakdown[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userPortfolioId, reportDate])
+  @@index([reportDate])
+  @@index([userPortfolioId, period, reportDate])
 }
-enum transactionStatus {
-  PENDING
-  APPROVED
-  REJECTED
+
+// Asset class breakdown (EQUITIES, ETFS, etc.)
+model PortfolioAssetBreakdown {
+  id            String      @id @default(cuid())
+  reportId      String
+  assetClass    AssetClass
+
+  holdings      Int         @default(0) // Number of different assets
+  totalCashValue Float      @default(0) // Sum of close values
+  percentage    Float       @default(0) // Percentage of total portfolio
+
+  report        UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+
+  @@unique([reportId, assetClass])
+  @@index([reportId])
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
