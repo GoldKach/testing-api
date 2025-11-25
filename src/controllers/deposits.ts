@@ -449,7 +449,7 @@ import { db } from "@/db/db";
 
 /* ───────────────────────── helpers ───────────────────────── */
 
-type TxStatus = $Enums.transactionStatus;
+type TxStatus = $Enums.TransactionStatus;
 
 const Status = {
   PENDING: "PENDING" as TxStatus,
