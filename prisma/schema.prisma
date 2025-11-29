@@ -1,20 +1,6 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // =====================
 // Prisma Schema
 // =====================
@@ -25,7 +11,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  // url      = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 // =====================
@@ -171,54 +157,126 @@ model PasswordResetToken {
 // Onboarding / KYC
 // =====================
 
+// model EntityOnboarding {
+//   id                      String   @id @default(cuid())
+//   entityType              String   // ideally enum: "individual" | "company"
+//   fullName                String
+//   userId                  String   @unique
+//   user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   dateOfBirth             DateTime
+//   tin                     String   @unique
+//   avatarUrl               String?
+//   idUrl                   String?
+//   homeAddress             String
+//   email                   String
+//   phoneNumber             String
+//   employmentStatus        String
+//   occupation              String
+//   companyName             String?
+//   hasBusiness             String?
+//   registrationNumber      String?
+//   companyAddress          String?
+//   businessType            String?
+//   incorporationDate       DateTime?
+//   authorizedRepName       String?
+//   isApproved              Boolean  @default(false)
+//   authorizedRepEmail      String?
+//   authorizedRepPhone      String?
+//   authorizedRepPosition   String?
+//   primaryGoal             String
+//   timeHorizon             String
+//   riskTolerance           String
+//   investmentExperience    String
+//   isPEP                   String   // ideally boolean or enum
+//   consentToDataCollection Boolean
+//   agreeToTerms            Boolean
+//   sourceOfWealth          String
+//   businessOwnership       String
+//   employmentIncome        String
+//   expectedInvestment      String
+//   businessName            String
+//   businessAddress         String
+//   establishmentDate       DateTime
+//   ownershipPercentage     String
+//   familyMemberDetails     String
+//   publicPosition          String
+//   relationshipToCountry   String
+//   sanctionsOrLegal        String   // ideally boolean or enum
+//   createdAt               DateTime @default(now())
+//   updatedAt               DateTime @updatedAt
+// }
+
+
 model EntityOnboarding {
   id                      String   @id @default(cuid())
-  entityType              String   // ideally enum: "individual" | "company"
-  fullName                String
   userId                  String   @unique
   user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  dateOfBirth             DateTime
-  tin                     String   @unique
+
+  // Core fields
+  entityType              String                 // "individual" | "company"
+  fullName                String?
+  dateOfBirth             DateTime?
+  tin                     String?   @unique
   avatarUrl               String?
-  idUrl                   String?
-  homeAddress             String
-  email                   String
-  phoneNumber             String
-  employmentStatus        String
-  occupation              String
+
+  // Contact & personal
+  homeAddress             String?
+  email                   String?
+  phoneNumber             String?
+  employmentStatus        String?
+  occupation              String?
+
+  // Company fields
   companyName             String?
+  idUrl                    String?
   hasBusiness             String?
   registrationNumber      String?
   companyAddress          String?
   businessType            String?
   incorporationDate       DateTime?
+
   authorizedRepName       String?
-  isApproved              Boolean  @default(false)
   authorizedRepEmail      String?
   authorizedRepPhone      String?
   authorizedRepPosition   String?
-  primaryGoal             String
-  timeHorizon             String
-  riskTolerance           String
-  investmentExperience    String
-  isPEP                   String   // ideally boolean or enum
-  consentToDataCollection Boolean
-  agreeToTerms            Boolean
-  sourceOfWealth          String
-  businessOwnership       String
-  employmentIncome        String
-  expectedInvestment      String
-  businessName            String
-  businessAddress         String
-  establishmentDate       DateTime
-  ownershipPercentage     String
-  familyMemberDetails     String
-  publicPosition          String
-  relationshipToCountry   String
-  sanctionsOrLegal        String   // ideally boolean or enum
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  isApproved              Boolean   @default(false)
+
+  // Investment profile
+  primaryGoal             String?
+  timeHorizon             String?
+  riskTolerance           String?
+  investmentExperience    String?
+  isPEP                   String?   // you may convert later to boolean
+  consentToDataCollection Boolean?
+  agreeToTerms            Boolean?
+
+  sourceOfWealth          String?
+  businessOwnership       String?
+  employmentIncome        String?
+  expectedInvestment      String?
+
+  // Required documents
+  nationalIdUrl           String?
+  bankStatementUrl        String?
+
+  // Optional uploaded documents
+  passportPhotoUrl        String?
+  tinCertificateUrl       String?
+
+  // Legacy / Optional Fields
+  businessName            String?
+  businessAddress         String?
+  establishmentDate       DateTime?
+  ownershipPercentage     String?
+  familyMemberDetails     String?
+  publicPosition          String?
+  relationshipToCountry   String?
+  sanctionsOrLegal        String?
+
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 }
+
 
 // =====================
 // Wallet & Cash Flows
