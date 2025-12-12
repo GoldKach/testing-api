@@ -140,6 +140,404 @@ const makeSixDigitToken = () =>
 //   }
 // }
 
+// export async function createUser(req: Request, res: Response) {
+//   const {
+//     email,
+//     phone,
+//     password,
+//     firstName,
+//     lastName,
+//     imageUrl,            // optional
+//     role,                // optional
+//     status,              // optional
+//   } = req.body as {
+//     email: string;
+//     phone: string;
+//     password: string;
+//     firstName: string;
+//     lastName: string;
+//     imageUrl?: string;
+//     role?: UserRole | string;
+//     status?: UserStatus | string;
+//   };
+
+//   try {
+//     // Basic validation
+//     if (!email || !phone || !password || !firstName || !lastName) {
+//       return res.status(400).json({ data: null, error: "Missing required fields." });
+//     }
+
+//     const emailNorm = email.trim().toLowerCase();
+//     const phoneNorm = phone.trim();
+//     const roleValue: UserRole = isValidRole(role) ? (role as UserRole) : UserRole.USER;
+//     const statusValue: UserStatus = isValidStatus(status) ? (status as UserStatus) : UserStatus.PENDING;
+
+//     // Pre-check (optional but gives nicer error than catching P2002)
+//     const existing = await db.user.findFirst({
+//       where: { OR: [{ email: emailNorm }, { phone: phoneNorm }] },
+//       select: { id: true },
+//     });
+//     if (existing) {
+//       return res
+//         .status(409)
+//         .json({ data: null, error: "User with this email or phone already exists" });
+//     }
+
+//     const hashedPassword = await bcrypt.hash(password, 12);
+//     const verificationCode = makeSixDigitToken();
+
+//     // Defaults for the new wallet
+//     const bankFee = 30;
+//     const transactionFee = 10;
+//     const feeAtBank = 10;
+//     const totalFees = bankFee + transactionFee + feeAtBank;
+//     const netAssetValue = 0 - totalFees;
+
+//     // Retry whole transaction a couple times for rare, concurrent accountNumber collisions
+//     let newUser:
+//       | {
+//           id: string;
+//           firstName: string | null;
+//           lastName: string | null;
+//           name: string | null;
+//           email: string;
+//           phone: string | null;
+//           imageUrl: string | null;
+//           role: UserRole;
+//           status: UserStatus;
+//           createdAt: Date;
+//           updatedAt: Date;
+//         }
+//       | undefined;
+
+//     for (let attempt = 0; attempt < 3; attempt++) {
+//       try {
+//         newUser = await db.$transaction(async (tx) => {
+//           const accountNumber = await generateAccountNumber();
+
+//           const user = await tx.user.create({
+//             data: {
+//               email: emailNorm,
+//               phone: phoneNorm,
+//               firstName,
+//               lastName,
+//               name: `${firstName} ${lastName}`.trim(),
+//               imageUrl, // let Prisma default if undefined
+//               password: hashedPassword,
+//               role: roleValue,
+//               status: statusValue, // typically PENDING until verification
+//               emailVerified: false,
+//               isApproved: false,
+//               token: verificationCode, // store 6-digit code for email verification
+
+//               // Atomic wallet creation
+//               wallet: {
+//                 create: {
+//                   accountNumber,
+//                   balance: 0,
+//                   bankFee,
+//                   transactionFee,
+//                   feeAtBank,
+//                   totalFees,
+//                   netAssetValue,
+//                 },
+//               },
+//             },
+//             select: {
+//               id: true,
+//               firstName: true,
+//               lastName: true,
+//               name: true,
+//               email: true,
+//               phone: true,
+//               imageUrl: true,
+//               role: true,
+//               status: true,
+//               createdAt: true,
+//               updatedAt: true,
+//             },
+//           });
+
+//           return user;
+//         });
+
+//         // success -> break retry loop
+//         break;
+//       } catch (err: any) {
+//         // Re-try only if this looks like a unique violation (e.g., accountNumber race)
+//         if (err?.code === "P2002" && attempt < 2) {
+//           continue;
+//         }
+//         throw err;
+//       }
+//     }
+
+//     // Should never be undefined here
+//     if (!newUser) {
+//       return res.status(500).json({ data: null, error: "Failed to create user." });
+//     }
+
+//     // Send verification email AFTER the DB commit
+//     await sendVerificationCodeResend({
+//       to: newUser.email,
+//       name: newUser.firstName ?? newUser.name ?? "there",
+//       code: verificationCode,
+//     });
+
+//     return res.status(201).json({ data: newUser, error: null });
+//   } catch (error: any) {
+//     if (error?.code === "P2002") {
+//       // Unique constraint violation (email/phone/accountNumber)
+//       return res.status(409).json({ data: null, error: "Email or phone already in use" });
+//     }
+//     console.error("Error creating user:", error);
+//     return res.status(500).json({ data: null, error: "Something went wrong" });
+//   }
+// }
+
+
+// export async function createUser(req: Request, res: Response) {
+//   const {
+//     email,
+//     phone,
+//     password,
+//     firstName,
+//     lastName,
+//     imageUrl,
+//     role,
+//     status,
+//   } = req.body as {
+//     email: string;
+//     phone: string;
+//     password: string;
+//     firstName: string;
+//     lastName: string;
+//     imageUrl?: string;
+//     role?: UserRole | string;
+//     status?: UserStatus | string;
+//   };
+
+//   try {
+//     // Basic validation
+//     if (!email || !phone || !password || !firstName || !lastName) {
+//       return res.status(400).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Missing required fields." 
+//       });
+//     }
+
+//     const emailNorm = email.trim().toLowerCase();
+//     const phoneNorm = phone.trim();
+//     const roleValue: UserRole = isValidRole(role) ? (role as UserRole) : UserRole.USER;
+//     const statusValue: UserStatus = isValidStatus(status) ? (status as UserStatus) : UserStatus.PENDING;
+
+//     // Pre-check for existing email and phone separately
+//     const existingEmail = await db.user.findUnique({
+//       where: { email: emailNorm },
+//       select: { id: true, email: true },
+//     });
+
+//     const existingPhone = await db.user.findUnique({
+//       where: { phone: phoneNorm },
+//       select: { id: true, phone: true },
+//     });
+
+//     // Handle duplicate cases with specific error messages
+//     if (existingEmail && existingPhone) {
+//       return res.status(409).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Account already exists. Please try creating a different account or login with your existing credentials.",
+//         errors: {
+//           email: "Email address is already registered",
+//           phone: "Phone number is already registered"
+//         }
+//       });
+//     }
+
+//     if (existingEmail) {
+//       return res.status(409).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Email address is already registered. Please use a different email or login.",
+//         errors: {
+//           email: "Email address is already registered"
+//         }
+//       });
+//     }
+
+//     if (existingPhone) {
+//       return res.status(409).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Phone number is already registered. Please use a different phone number or login.",
+//         errors: {
+//           phone: "Phone number is already registered"
+//         }
+//       });
+//     }
+
+//     const hashedPassword = await bcrypt.hash(password, 12);
+//     const verificationCode = makeSixDigitToken();
+
+//     // Defaults for the new wallet
+//     const bankFee = 30;
+//     const transactionFee = 10;
+//     const feeAtBank = 10;
+//     const totalFees = bankFee + transactionFee + feeAtBank;
+//     const netAssetValue = 0 - totalFees;
+
+//     // Retry whole transaction a couple times for rare, concurrent accountNumber collisions
+//     let newUser:
+//       | {
+//           id: string;
+//           firstName: string | null;
+//           lastName: string | null;
+//           name: string | null;
+//           email: string;
+//           phone: string | null;
+//           imageUrl: string | null;
+//           role: UserRole;
+//           status: UserStatus;
+//           createdAt: Date;
+//           updatedAt: Date;
+//         }
+//       | undefined;
+
+//     for (let attempt = 0; attempt < 3; attempt++) {
+//       try {
+//         newUser = await db.$transaction(async (tx) => {
+//           const accountNumber = await generateAccountNumber();
+
+//           const user = await tx.user.create({
+//             data: {
+//               email: emailNorm,
+//               phone: phoneNorm,
+//               firstName,
+//               lastName,
+//               name: `${firstName} ${lastName}`.trim(),
+//               imageUrl,
+//               password: hashedPassword,
+//               role: roleValue,
+//               status: statusValue,
+//               emailVerified: false,
+//               isApproved: false,
+//               token: verificationCode,
+
+//               wallet: {
+//                 create: {
+//                   accountNumber,
+//                   balance: 0,
+//                   bankFee,
+//                   transactionFee,
+//                   feeAtBank,
+//                   totalFees,
+//                   netAssetValue,
+//                 },
+//               },
+//             },
+//             select: {
+//               id: true,
+//               firstName: true,
+//               lastName: true,
+//               name: true,
+//               email: true,
+//               phone: true,
+//               imageUrl: true,
+//               role: true,
+//               status: true,
+//               createdAt: true,
+//               updatedAt: true,
+//             },
+//           });
+
+//           return user;
+//         });
+
+//         break;
+//       } catch (err: any) {
+//         if (err?.code === "P2002" && attempt < 2) {
+//           continue;
+//         }
+//         throw err;
+//       }
+//     }
+
+//     if (!newUser) {
+//       return res.status(500).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Failed to create user." 
+//       });
+//     }
+
+//     // Send verification email AFTER the DB commit
+//     await sendVerificationCodeResend({
+//       to: newUser.email,
+//       name: newUser.firstName ?? newUser.name ?? "there",
+//       code: verificationCode,
+//     });
+
+//     return res.status(201).json({ 
+//       success: true,
+//       data: newUser, 
+//       message: "Account created successfully" 
+//     });
+//   } catch (error: any) {
+//     console.error("Error creating user:", error);
+    
+//     // Fallback for P2002 errors that slip through
+//     if (error?.code === "P2002") {
+//       const target = error?.meta?.target;
+//       if (Array.isArray(target)) {
+//         if (target.includes("email") && target.includes("phone")) {
+//           return res.status(409).json({ 
+//             success: false,
+//             data: null, 
+//             message: "Account already exists. Please try creating a different account.",
+//             errors: {
+//               email: "Email address is already registered",
+//               phone: "Phone number is already registered"
+//             }
+//           });
+//         } else if (target.includes("email")) {
+//           return res.status(409).json({ 
+//             success: false,
+//             data: null, 
+//             message: "Email address is already registered.",
+//             errors: {
+//               email: "Email address is already registered"
+//             }
+//           });
+//         } else if (target.includes("phone")) {
+//           return res.status(409).json({ 
+//             success: false,
+//             data: null, 
+//             message: "Phone number is already registered.",
+//             errors: {
+//               phone: "Phone number is already registered"
+//             }
+//           });
+//         }
+//       }
+//       return res.status(409).json({ 
+//         success: false,
+//         data: null, 
+//         message: "Email or phone already in use" 
+//       });
+//     }
+    
+//     return res.status(500).json({ 
+//       success: false,
+//       data: null, 
+//       message: "Something went wrong. Please try again." 
+//     });
+//   }
+// }
+
+
+
 export async function createUser(req: Request, res: Response) {
   const {
     email,
@@ -147,9 +545,9 @@ export async function createUser(req: Request, res: Response) {
     password,
     firstName,
     lastName,
-    imageUrl,            // optional
-    role,                // optional
-    status,              // optional
+    imageUrl,
+    role,
+    status,
   } = req.body as {
     email: string;
     phone: string;
@@ -164,7 +562,12 @@ export async function createUser(req: Request, res: Response) {
   try {
     // Basic validation
     if (!email || !phone || !password || !firstName || !lastName) {
-      return res.status(400).json({ data: null, error: "Missing required fields." });
+      return res.status(400).json({ 
+        success: false,
+        data: null, 
+        message: "Missing required fields.",
+        errors: {}
+      });
     }
 
     const emailNorm = email.trim().toLowerCase();
@@ -172,15 +575,51 @@ export async function createUser(req: Request, res: Response) {
     const roleValue: UserRole = isValidRole(role) ? (role as UserRole) : UserRole.USER;
     const statusValue: UserStatus = isValidStatus(status) ? (status as UserStatus) : UserStatus.PENDING;
 
-    // Pre-check (optional but gives nicer error than catching P2002)
-    const existing = await db.user.findFirst({
-      where: { OR: [{ email: emailNorm }, { phone: phoneNorm }] },
-      select: { id: true },
-    });
-    if (existing) {
-      return res
-        .status(409)
-        .json({ data: null, error: "User with this email or phone already exists" });
+    // Pre-check for existing email and phone separately
+    const [existingEmail, existingPhone] = await Promise.all([
+      db.user.findUnique({
+        where: { email: emailNorm },
+        select: { id: true, email: true },
+      }),
+      db.user.findUnique({
+        where: { phone: phoneNorm },
+        select: { id: true, phone: true },
+      })
+    ]);
+
+    // Handle duplicate cases with specific error messages
+    if (existingEmail && existingPhone) {
+      return res.status(409).json({ 
+        success: false,
+        data: null, 
+        message: "Account already exists. Please try creating a different account or login with your existing credentials.",
+        errors: {
+          email: "Email address is already registered",
+          phone: "Phone number is already registered"
+        }
+      });
+    }
+
+    if (existingEmail) {
+      return res.status(409).json({ 
+        success: false,
+        data: null, 
+        message: "Email address is already registered. Please use a different email or login.",
+        errors: {
+          email: "Email address is already registered"
+        }
+      });
+    }
+
+    if (existingPhone) {
+      return res.status(409).json({ 
+        success: false,
+        data: null, 
+        message: "Phone number is already registered. Please use a different phone number or login.",
+        errors: {
+          phone: "Phone number is already registered"
+        }
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -222,15 +661,14 @@ export async function createUser(req: Request, res: Response) {
               firstName,
               lastName,
               name: `${firstName} ${lastName}`.trim(),
-              imageUrl, // let Prisma default if undefined
+              imageUrl,
               password: hashedPassword,
               role: roleValue,
-              status: statusValue, // typically PENDING until verification
+              status: statusValue,
               emailVerified: false,
               isApproved: false,
-              token: verificationCode, // store 6-digit code for email verification
+              token: verificationCode,
 
-              // Atomic wallet creation
               wallet: {
                 create: {
                   accountNumber,
@@ -261,7 +699,7 @@ export async function createUser(req: Request, res: Response) {
           return user;
         });
 
-        // success -> break retry loop
+        // Success -> break retry loop
         break;
       } catch (err: any) {
         // Re-try only if this looks like a unique violation (e.g., accountNumber race)
@@ -272,28 +710,90 @@ export async function createUser(req: Request, res: Response) {
       }
     }
 
-    // Should never be undefined here
     if (!newUser) {
-      return res.status(500).json({ data: null, error: "Failed to create user." });
+      return res.status(500).json({ 
+        success: false,
+        data: null, 
+        message: "Failed to create user.",
+        errors: {}
+      });
     }
 
     // Send verification email AFTER the DB commit
-    await sendVerificationCodeResend({
-      to: newUser.email,
-      name: newUser.firstName ?? newUser.name ?? "there",
-      code: verificationCode,
-    });
-
-    return res.status(201).json({ data: newUser, error: null });
-  } catch (error: any) {
-    if (error?.code === "P2002") {
-      // Unique constraint violation (email/phone/accountNumber)
-      return res.status(409).json({ data: null, error: "Email or phone already in use" });
+    try {
+      await sendVerificationCodeResend({
+        to: newUser.email,
+        name: newUser.firstName ?? newUser.name ?? "there",
+        code: verificationCode,
+      });
+    } catch (emailError) {
+      console.error("Error sending verification email:", emailError);
+      // Don't fail the registration if email fails, just log it
+      // User can request a new verification code later
     }
+
+    return res.status(201).json({ 
+      success: true,
+      data: newUser, 
+      message: "Account created successfully. Please check your email for the verification code.",
+      errors: {}
+    });
+  } catch (error: any) {
     console.error("Error creating user:", error);
-    return res.status(500).json({ data: null, error: "Something went wrong" });
+    
+    // Fallback for P2002 errors that slip through
+    if (error?.code === "P2002") {
+      const target = error?.meta?.target;
+      
+      if (Array.isArray(target)) {
+        if (target.includes("email") && target.includes("phone")) {
+          return res.status(409).json({ 
+            success: false,
+            data: null, 
+            message: "Account already exists. Please try creating a different account.",
+            errors: {
+              email: "Email address is already registered",
+              phone: "Phone number is already registered"
+            }
+          });
+        } else if (target.includes("email")) {
+          return res.status(409).json({ 
+            success: false,
+            data: null, 
+            message: "Email address is already registered.",
+            errors: {
+              email: "Email address is already registered"
+            }
+          });
+        } else if (target.includes("phone")) {
+          return res.status(409).json({ 
+            success: false,
+            data: null, 
+            message: "Phone number is already registered.",
+            errors: {
+              phone: "Phone number is already registered"
+            }
+          });
+        }
+      }
+      
+      return res.status(409).json({ 
+        success: false,
+        data: null, 
+        message: "Email or phone already in use",
+        errors: {}
+      });
+    }
+    
+    return res.status(500).json({ 
+      success: false,
+      data: null, 
+      message: "Something went wrong. Please try again.",
+      errors: {}
+    });
   }
 }
+
 
 
 /* ======================
@@ -529,191 +1029,6 @@ export async function getUserById(req: Request, res: Response) {
     return res.status(500).json({ data: null, error: "Server error" });
   }
 }
-
-/* ======================
-   UPDATE USER
-====================== */
-// export async function updateUser(req: AuthRequest, res: Response) {
-//   const { id } = req.params;
-//   const {
-//     firstName,
-//     lastName,
-//     email,
-//     phone,
-//     role,
-//     status,
-//     password,
-//     imageUrl,
-//   } = req.body as {
-//     firstName?: string;
-//     lastName?: string;
-//     email?: string;
-//     phone?: string;
-//     role?: UserRole | string;
-//     status?: UserStatus | string;
-//     password?: string;
-//     imageUrl?: string;
-//   };
-
-//   try {
-//     const existingUser = await db.user.findUnique({ where: { id } });
-//     if (!existingUser) {
-//       return res.status(404).json({ data: null, error: "User not found" });
-//     }
-
-//     // Uniqueness checks for email/phone
-//     if (email || phone) {
-//       const emailNorm = email?.trim().toLowerCase();
-//       const phoneNorm = phone?.trim();
-//       const conflictUser = await db.user.findFirst({
-//         where: {
-//           OR: [{ email: emailNorm ?? undefined }, { phone: phoneNorm ?? undefined }],
-//           NOT: { id },
-//         },
-//         select: { id: true },
-//       });
-//       if (conflictUser) {
-//         return res
-//           .status(409)
-//           .json({ data: null, error: "Email or phone already in use by another user" });
-//       }
-//     }
-
-//     const roleValue =
-//       role !== undefined ? (isValidRole(role) ? (role as UserRole) : undefined) : undefined;
-//     const statusValue =
-//       status !== undefined ? (isValidStatus(status) ? (status as UserStatus) : undefined) : undefined;
-
-//     const hashedPassword = password ? await bcrypt.hash(password, 12) : undefined;
-
-//     const nextFirst = firstName ?? existingUser.firstName;
-//     const nextLast = lastName ?? existingUser.lastName;
-
-//     const updatedUser = await db.user.update({
-//       where: { id },
-//       data: {
-//         firstName: nextFirst,
-//         lastName: nextLast,
-//         name: `${nextFirst} ${nextLast}`.trim(),
-//         email: email ? email.trim().toLowerCase() : existingUser.email,
-//         phone: phone ? phone.trim() : existingUser.phone,
-//         role: roleValue ?? existingUser.role,
-//         status: statusValue ?? existingUser.status,
-//         password: hashedPassword ?? existingUser.password,
-//         imageUrl: imageUrl ?? existingUser.imageUrl,
-//       },
-//       select: {
-//         id: true,
-//         firstName: true,
-//         lastName: true,
-//         name: true,
-//         email: true,
-//         phone: true,
-//         role: true,
-//         status: true,
-//         imageUrl: true,
-//         createdAt: true,
-//         updatedAt: true,
-//       },
-//     });
-
-//     return res.status(200).json({ data: updatedUser, error: null });
-//   } catch (error) {
-//     console.error("Error updating user:", error);
-//     return res.status(500).json({ data: null, error: "Failed to update user" });
-//   }
-// }
-
-// export async function updateUser(req: Request, res: Response) {
-//   const { id } = req.params;
-//   const {
-//     firstName,
-//     lastName,
-//     email,
-//     phone,
-//     role,
-//     status,
-//     password,
-//     imageUrl,
-//   } = req.body as {
-//     firstName?: string;
-//     lastName?: string;
-//     email?: string;
-//     phone?: string;
-//     role?: UserRole | string;
-//     status?: UserStatus | string;
-//     password?: string;
-//     imageUrl?: string;
-//   };
-
-//   try {
-//     const existingUser = await db.user.findUnique({ where: { id } });
-//     if (!existingUser) {
-//       return res.status(404).json({ data: null, error: "User not found" });
-//     }
-
-//     // Uniqueness checks for email/phone
-//     if (email || phone) {
-//       const emailNorm = email?.trim().toLowerCase();
-//       const phoneNorm = phone?.trim();
-//       const conflictUser = await db.user.findFirst({
-//         where: {
-//           OR: [{ email: emailNorm ?? undefined }, { phone: phoneNorm ?? undefined }],
-//           NOT: { id },
-//         },
-//         select: { id: true },
-//       });
-//       if (conflictUser) {
-//         return res
-//           .status(409)
-//           .json({ data: null, error: "Email or phone already in use by another user" });
-//       }
-//     }
-
-//     const roleValue =
-//       role !== undefined ? (isValidRole(role) ? (role as UserRole) : undefined) : undefined;
-//     const statusValue =
-//       status !== undefined ? (isValidStatus(status) ? (status as UserStatus) : undefined) : undefined;
-
-//     const hashedPassword = password ? await bcrypt.hash(password, 12) : undefined;
-
-//     const nextFirst = firstName ?? existingUser.firstName;
-//     const nextLast = lastName ?? existingUser.lastName;
-
-//     const updatedUser = await db.user.update({
-//       where: { id },
-//       data: {
-//         firstName: nextFirst,
-//         lastName: nextLast,
-//         name: `${nextFirst} ${nextLast}`.trim(),
-//         email: email ? email.trim().toLowerCase() : existingUser.email,
-//         phone: phone ? phone.trim() : existingUser.phone,
-//         role: roleValue ?? existingUser.role,
-//         status: statusValue ?? existingUser.status,
-//         password: hashedPassword ?? existingUser.password,
-//         imageUrl: imageUrl ?? existingUser.imageUrl,
-//       },
-//       select: {
-//         id: true,
-//         firstName: true,
-//         lastName: true,
-//         name: true,
-//         email: true,
-//         phone: true,
-//         role: true,
-//         status: true,
-//         imageUrl: true,
-//         createdAt: true,
-//         updatedAt: true,
-//       },
-//     });
-
-//     return res.status(200).json({ data: updatedUser, error: null });
-//   } catch (error) {
-//     console.error("Error updating user:", error);
-//     return res.status(500).json({ data: null, error: "Failed to update user" });
-//   }
-// }
 
 
 export async function updateUser(req: Request, res: Response) {
