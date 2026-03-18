@@ -1,265 +1,445 @@
-
-
 // src/controllers/user-portfolio.ts
 import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import type { Prisma } from "@prisma/client";
 
-/* ----------------- shared types ----------------- */
+/* ------------------------------------------------------------------ */
+/*  Types                                                               */
+/* ------------------------------------------------------------------ */
 
-// Accept either a Prisma transaction client (inside $transaction)
-// or your exported db instance (which may be an Omit<PrismaClient,...>).
 type Tx = Prisma.TransactionClient | typeof db;
 
-/* ----------------- helpers ----------------- */
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                             */
+/* ------------------------------------------------------------------ */
 
 function toNumber(v: unknown, fallback = 0): number {
-  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
+  const n =
+    typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
   return Number.isFinite(n) ? n : fallback;
 }
 
 function parseInclude(q: any): Prisma.UserPortfolioInclude | undefined {
-  // supports: ?include=user,portfolio,userAssets OR booleans ?includeUser=1&includePortfolio=1&includeUserAssets=1
-  const includeParam = (q.include as string | undefined)?.toLowerCase() ?? "";
-  const set = new Set(includeParam.split(",").map((s) => s.trim()).filter(Boolean));
+  const raw = ((q.include as string | undefined) ?? "").toLowerCase();
+  const set = new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 
   const includeUser =
-    set.has("user") || set.has("member") || q.includeUser === "1" || q.includeUser === "true";
+    set.has("user") || set.has("member") ||
+    q.includeUser === "1" || q.includeUser === "true";
   const includePortfolio =
-    set.has("portfolio") || q.includePortfolio === "1" || q.includePortfolio === "true";
+    set.has("portfolio") ||
+    q.includePortfolio === "1" || q.includePortfolio === "true";
   const includeUserAssets =
-    set.has("userassets") || set.has("assets") || q.includeUserAssets === "1" || q.includeUserAssets === "true";
+    set.has("userassets") || set.has("assets") ||
+    q.includeUserAssets === "1" || q.includeUserAssets === "true";
+  const includeSubPortfolios =
+    set.has("subportfolios") || set.has("subs") ||
+    q.includeSubPortfolios === "1" || q.includeSubPortfolios === "true";
+  const includeWallet =
+    set.has("wallet") ||
+    q.includeWallet === "1" || q.includeWallet === "true";
 
   const include: Prisma.UserPortfolioInclude = {};
+
   if (includeUser) {
-    include.user = { include: { wallet: true } };
+    include.user = {
+      select: {
+        id: true, firstName: true, lastName: true, name: true,
+        email: true, phone: true, role: true, status: true,
+        masterWallet: {
+          select: {
+            id: true, accountNumber: true,
+            netAssetValue: true, totalDeposited: true,
+            totalWithdrawn: true, totalFees: true, status: true,
+          },
+        },
+      },
+    };
   }
   if (includePortfolio) {
     include.portfolio = {
-      include: {
-        assets: { include: { asset: true } }, // PortfolioAsset -> Asset
-      },
+      include: { assets: { include: { asset: true } } },
     };
   }
   if (includeUserAssets) {
-    include.userAssets = {
-      include: {
-        portfolioAsset: { include: { asset: true, portfolio: true } },
-      },
+    include.userAssets = { include: { asset: true } };
+  }
+  if (includeSubPortfolios) {
+    include.subPortfolios = {
+      orderBy: { generation: "asc" },
+      include: { assets: { include: { asset: true } } },
     };
+  }
+  if (includeWallet) {
+    include.wallet = true;
   }
 
   return Object.keys(include).length ? include : undefined;
 }
 
-/** pick allocation percent from PortfolioAsset->Asset or common fallbacks */
-function pickAllocPercent(pa: any): number {
-  return toNumber(
-    pa?.asset?.allocPercent ??
-      pa?.asset?.allocationPercentage ??
-      pa?.allocPercent ??
-      pa?.allocationPercentage,
-    0
-  );
-}
+/** Default rich include used in most GET responses */
+const DEFAULT_INCLUDE: Prisma.UserPortfolioInclude = {
+  user: {
+    select: {
+      id: true, firstName: true, lastName: true, name: true,
+      email: true, phone: true,
+      masterWallet: {
+        select: {
+          id: true, accountNumber: true,
+          netAssetValue: true, status: true,
+        },
+      },
+    },
+  },
+  portfolio:     { include: { assets: { include: { asset: true } } } },
+  userAssets:    { include: { asset: true } },
+  wallet:        true,
+  subPortfolios: {
+    orderBy: { generation: "asc" },
+    include: { assets: { include: { asset: true } } },
+  },
+};
 
-/** compute UPA values from NAV + asset fields */
-function computeUPA(nav: number, allocPercent: number, costPerShare: number, closePrice: number) {
-  const costPrice = (allocPercent / 100) * nav;
-  const stock = costPerShare > 0 ? costPrice / costPerShare : 0;
-  const closeValue = closePrice * stock;
-  const lossGain = closeValue - costPrice;
+/** Compute derived fields for a single UserPortfolioAsset */
+function computeUPA(
+  nav: number,
+  userAllocPercent: number,
+  userCostPerShare: number,
+  currentClosePrice: number
+) {
+  const costPrice  = (userAllocPercent / 100) * nav;
+  const stock      = userCostPerShare > 0 ? costPrice / userCostPerShare : 0;
+  const closeValue = currentClosePrice * stock;
+  const lossGain   = closeValue - costPrice;
   return { costPrice, stock, closeValue, lossGain };
 }
 
-/** Recompute all UserPortfolioAssets for a given UserPortfolio and update portfolioValue */
+/**
+ * Recompute all UserPortfolioAssets for a given UserPortfolio.
+ * Uses the portfolio's OWN PortfolioWallet.netAssetValue (not master wallet).
+ */
 async function recomputeUPAsFor(userPortfolioId: string, client: Tx = db) {
   const up = await client.userPortfolio.findUnique({
     where: { id: userPortfolioId },
     include: {
-      user: { include: { wallet: true } },
-      portfolio: { include: { assets: { include: { asset: true } } } },
+      wallet:     true, // PortfolioWallet
+      userAssets: { include: { asset: { select: { id: true, closePrice: true } } } },
     },
   });
 
-  if (!up) throw new Error("UserPortfolio not found.");
-  if (!up.user?.wallet) throw new Error("User wallet not found.");
+  if (!up)         throw new Error("UserPortfolio not found.");
+  if (!up.wallet)  throw new Error("Portfolio wallet not found.");
 
-  const nav = toNumber(up.user.wallet.netAssetValue, 0);
+  const nav = toNumber(up.wallet.netAssetValue, 0);
 
-  let totalCostPrice = 0;
-  let count = 0;
+  let totalPortfolioValue = 0;
+  let totalCostPrice      = 0;
 
-  for (const pa of up.portfolio.assets) {
-    const alloc = pickAllocPercent(pa);
-    const cps = toNumber(pa.asset?.costPerShare, 0);
-    const close = toNumber(pa.asset?.closePrice, 0);
+  for (const ua of up.userAssets) {
+    const { costPrice, stock, closeValue, lossGain } = computeUPA(
+      nav,
+      toNumber(ua.allocationPercentage, 0),
+      toNumber(ua.costPerShare, 0),
+      toNumber(ua.asset?.closePrice, 0)
+    );
 
-    const { costPrice, stock, closeValue, lossGain } = computeUPA(nav, alloc, cps, close);
-
-    await client.userPortfolioAsset.upsert({
-      where: {
-        userPortfolioId_portfolioAssetId: {
-          userPortfolioId: up.id,
-          portfolioAssetId: pa.id,
-        },
-      },
-      update: { costPrice, stock, closeValue, lossGain },
-      create: {
-        userPortfolioId: up.id,
-        portfolioAssetId: pa.id,
-        costPrice,
-        stock,
-        closeValue,
-        lossGain,
-      },
+    await client.userPortfolioAsset.update({
+      where: { id: ua.id },
+      data:  { costPrice, stock, closeValue, lossGain },
     });
 
-    totalCostPrice += costPrice;
-    count += 1;
+    totalPortfolioValue += closeValue;
+    totalCostPrice      += costPrice;
   }
 
   await client.userPortfolio.update({
     where: { id: up.id },
-    data: { portfolioValue: totalCostPrice },
+    data: {
+      portfolioValue: totalPortfolioValue,
+      totalInvested:  totalCostPrice,
+      totalLossGain:  totalPortfolioValue - totalCostPrice,
+    },
   });
 
-  return { count, totalCostPrice };
+  // Sync portfolio wallet NAV
+  await client.portfolioWallet.update({
+    where: { id: up.wallet.id },
+    data:  { netAssetValue: totalPortfolioValue },
+  });
+
+  return { count: up.userAssets.length, totalPortfolioValue };
 }
 
+/**
+ * Sync MasterWallet by summing all PortfolioWallet NAVs for the user.
+ */
+async function syncMasterWallet(client: Tx, userId: string) {
+  const wallets = await client.portfolioWallet.findMany({
+    where:  { userPortfolio: { userId } },
+    select: { netAssetValue: true },
+  });
 
+  const totalNav = wallets.reduce((sum, w) => sum + toNumber(w.netAssetValue, 0), 0);
 
+  await client.masterWallet.updateMany({
+    where: { userId },
+    data:  { netAssetValue: totalNav },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  CREATE  POST /user-portfolios                                       */
+/* ------------------------------------------------------------------ */
+/**
+ * Enroll a user into a portfolio template with a custom name.
+ * Creates:
+ *  - UserPortfolio (with customName)
+ *  - PortfolioWallet (dedicated wallet for this enrollment)
+ *  - SubPortfolio generation=0 (the initial "X" slice)
+ *  - SubPortfolioAssets (snapshot of initial allocation)
+ *  - UserPortfolioAssets (live merged positions)
+ *
+ * Body: {
+ *   userId, portfolioId, customName,
+ *   amountInvested,          ← the deposit amount going into this portfolio
+ *   assetAllocations: [{ assetId, allocationPercentage, costPerShare }]
+ * }
+ */
 export async function createUserPortfolio(req: Request, res: Response) {
   try {
-    const { userId, portfolioId } = req.body as { userId?: string; portfolioId?: string };
-    if (!userId || !portfolioId) {
-      return res.status(400).json({ data: null, error: "userId and portfolioId are required." });
+    const { userId, portfolioId, customName, amountInvested, assetAllocations } =
+      req.body as {
+        userId?: string;
+        portfolioId?: string;
+        customName?: string;
+        amountInvested?: number | string;
+        assetAllocations?: Array<{
+          assetId: string;
+          allocationPercentage: number;
+          costPerShare: number;
+        }>;
+      };
+
+    if (!userId || !portfolioId || !customName?.trim()) {
+      return res.status(400).json({
+        data: null,
+        error: "userId, portfolioId and customName are required.",
+      });
+    }
+    if (!assetAllocations?.length) {
+      return res.status(400).json({
+        data: null,
+        error: "assetAllocations array is required with at least one asset.",
+      });
     }
 
-    // Step 1 + 2: fetch user (with wallet) and portfolio (with assets) in parallel
+    const investedAmt = toNumber(amountInvested, 0);
+    if (investedAmt <= 0) {
+      return res.status(400).json({ data: null, error: "amountInvested must be > 0." });
+    }
+
+    // Validate each allocation entry
+    for (const a of assetAllocations) {
+      if (!a.assetId) {
+        return res.status(400).json({ data: null, error: "Each allocation must have an assetId." });
+      }
+      if (typeof a.allocationPercentage !== "number" || a.allocationPercentage < 0) {
+        return res.status(400).json({ data: null, error: "allocationPercentage must be >= 0." });
+      }
+      if (typeof a.costPerShare !== "number" || a.costPerShare < 0) {
+        return res.status(400).json({ data: null, error: "costPerShare must be >= 0." });
+      }
+    }
+
+    // Existence checks
     const [user, portfolio] = await Promise.all([
-      db.user.findUnique({ where: { id: userId }, include: { wallet: true } }),
-      db.portfolio.findUnique({
-        where: { id: portfolioId },
-        include: { assets: { include: { asset: true } } }, // PortfolioAsset -> Asset
-      }),
+      db.user.findUnique({ where: { id: userId }, select: { id: true, masterWallet: { select: { id: true } } } }),
+      db.portfolio.findUnique({ where: { id: portfolioId } }),
     ]);
 
-    if (!user) return res.status(404).json({ data: null, error: "User not found." });
-    if (!user.wallet) return res.status(400).json({ data: null, error: "User wallet not found." });
+    if (!user)      return res.status(404).json({ data: null, error: "User not found." });
+    if (!user.masterWallet) {
+      return res.status(400).json({ data: null, error: "User master wallet not found." });
+    }
     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found." });
 
-    const walletValue = Number(user.wallet.netAssetValue) || 0;
+    // Check name uniqueness for this user+portfolio combination
+    const nameConflict = await db.userPortfolio.findFirst({
+      where: { userId, portfolioId, customName: customName.trim() },
+      select: { id: true },
+    });
+    if (nameConflict) {
+      return res.status(409).json({
+        data: null,
+        error: `You already have a portfolio named "${customName.trim()}" for this fund.`,
+      });
+    }
 
-    // Pre-compute rows for speed
-    const rows = portfolio.assets.map((pa) => {
-      const alloc = Number(
-        (pa.asset as any)?.allocPercent ??
-        pa.asset.allocationPercentage ??
-        (pa as any)?.allocPercent ??
-        (pa as any)?.allocationPercentage ??
-        0
+    // Fetch current close prices for all assets
+    const assetIds = assetAllocations.map((a) => a.assetId);
+    const assets   = await db.asset.findMany({
+      where:  { id: { in: assetIds } },
+      select: { id: true, closePrice: true },
+    });
+    const assetMap = new Map(assets.map((a) => [a.id, a]));
+
+    for (const a of assetAllocations) {
+      if (!assetMap.has(a.assetId)) {
+        return res.status(404).json({ data: null, error: `Asset ${a.assetId} not found.` });
+      }
+    }
+
+    // Pre-compute rows using amountInvested as the NAV for this slice
+    const rows = assetAllocations.map((a) => {
+      const closePrice = toNumber(assetMap.get(a.assetId)!.closePrice, 0);
+      const { costPrice, stock, closeValue, lossGain } = computeUPA(
+        investedAmt,
+        a.allocationPercentage,
+        a.costPerShare,
+        closePrice
       );
-      const cps = Number(pa.asset.costPerShare) || 0;
-      const close = Number(pa.asset.closePrice) || 0;
-
-      const costPrice = (alloc / 100) * walletValue;
-      const stock = cps > 0 ? costPrice / cps : 0;
-      const closeValue = close * stock;
-      const lossGain = closeValue - costPrice;
-
-      return { paId: pa.id, costPrice, stock, closeValue, lossGain };
+      return { ...a, costPrice, stock, closeValue, lossGain, closePrice };
     });
 
-    const totalCostPrice = rows.reduce((sum, r) => sum + r.costPrice, 0);
+    const totalCloseValue = rows.reduce((s, r) => s + r.closeValue, 0);
 
-    // Step 3 + 4: do writes inside a transaction (with higher timeout)
-    const upId = await db.$transaction(
-      async (tx) => {
-        // create the UserPortfolio
-        const up = await tx.userPortfolio.create({
-          data: { userId, portfolioId, portfolioValue: 0 },
-        });
+    // Default fee structure
+    const bankFee        = 30;
+    const transactionFee = 10;
+    const feeAtBank      = 10;
+    const totalFees      = bankFee + transactionFee + feeAtBank;
+    const cashAtBank     = investedAmt - rows.reduce((s, r) => s + r.costPrice, 0);
 
-        // create UPA rows in bulk (fast)
-        if (rows.length) {
-          await tx.userPortfolioAsset.createMany({
-            data: rows.map((r) => ({
-              userPortfolioId: up.id,
-              portfolioAssetId: r.paId,
-              costPrice: r.costPrice,
-              stock: r.stock,
-              closeValue: r.closeValue,
-              lossGain: r.lossGain,
-            })),
-            skipDuplicates: true, // safe if re-called
-          });
-        }
+    const upId = await db.$transaction(async (tx) => {
+      // 1. Create UserPortfolio
+      const up = await tx.userPortfolio.create({
+        data: {
+          userId,
+          portfolioId,
+          customName:     customName.trim(),
+          portfolioValue: totalCloseValue,
+          totalInvested:  investedAmt,
+          totalLossGain:  totalCloseValue - investedAmt,
+        },
+      });
 
-        // update portfolioValue
-        await tx.userPortfolio.update({
-          where: { id: up.id },
-          data: { portfolioValue: totalCostPrice },
-        });
+      // 2. Create dedicated PortfolioWallet
+      const accountNumber = `GKP${Date.now().toString().slice(-7)}`;
+      await tx.portfolioWallet.create({
+        data: {
+          accountNumber,
+          userPortfolioId: up.id,
+          balance:         investedAmt,
+          bankFee,
+          transactionFee,
+          feeAtBank,
+          totalFees,
+          netAssetValue:   totalCloseValue,
+          status:          "ACTIVE",
+        },
+      });
 
-        // RETURN ONLY THE ID – do not read relations inside the tx
-        return up.id;
-      },
-      { timeout: 20000, maxWait: 5000 } // ⬅️ increase timeout so heavy portfolios don't trip 5s limit
-    );
+      // 3. Create SubPortfolio generation=0 (the initial "X" slice)
+      const sub = await tx.subPortfolio.create({
+        data: {
+          userPortfolioId: up.id,
+          generation:      0,
+          label:           `${customName.trim()} - Initial`,
+          amountInvested:  investedAmt,
+          totalCostPrice:  rows.reduce((s, r) => s + r.costPrice, 0),
+          totalCloseValue,
+          totalLossGain:   totalCloseValue - investedAmt,
+          bankFee,
+          transactionFee,
+          feeAtBank,
+          totalFees,
+          cashAtBank,
+          snapshotDate:    new Date(),
+        },
+      });
 
-    // Final read with relations OUTSIDE the transaction to avoid timeout/closure
-    const include = parseInclude(req.query) ?? {
-      user: { include: { wallet: true } },
-      portfolio: { include: { assets: { include: { asset: true } } } },
-      userAssets: { include: { portfolioAsset: { include: { asset: true, portfolio: true } } } },
-    };
+      // 4. Create SubPortfolioAssets (snapshot)
+      await tx.subPortfolioAsset.createMany({
+        data: rows.map((r) => ({
+          subPortfolioId:       sub.id,
+          assetId:              r.assetId,
+          allocationPercentage: r.allocationPercentage,
+          costPerShare:         r.costPerShare,
+          costPrice:            r.costPrice,
+          stock:                r.stock,
+          closePrice:           r.closePrice,
+          closeValue:           r.closeValue,
+          lossGain:             r.lossGain,
+        })),
+        skipDuplicates: true,
+      });
 
-    const withRelations = await db.userPortfolio.findUnique({
-      where: { id: upId },
-      include,
+      // 5. Create live UserPortfolioAssets (X2 state — same as X at creation)
+      await tx.userPortfolioAsset.createMany({
+        data: rows.map((r) => ({
+          userPortfolioId:      up.id,
+          assetId:              r.assetId,
+          allocationPercentage: r.allocationPercentage,
+          costPerShare:         r.costPerShare,
+          costPrice:            r.costPrice,
+          stock:                r.stock,
+          closeValue:           r.closeValue,
+          lossGain:             r.lossGain,
+        })),
+        skipDuplicates: true,
+      });
+
+      // 6. Update MasterWallet totals
+      await tx.masterWallet.update({
+        where: { userId },
+        data: {
+          totalDeposited: { increment: investedAmt },
+          netAssetValue:  { increment: totalCloseValue },
+        },
+      });
+
+      return up.id;
+    }, { timeout: 20_000, maxWait: 5_000 });
+
+    const result = await db.userPortfolio.findUnique({
+      where:   { id: upId },
+      include: DEFAULT_INCLUDE,
     });
 
-    return res.status(201).json({ data: withRelations, error: null });
+    return res.status(201).json({ data: result, error: null });
   } catch (err: any) {
-    // Unique violation (userId, portfolioId)
     if (err?.code === "P2002") {
-      return res.status(409).json({ data: null, error: "User already has this portfolio." });
+      return res.status(409).json({ data: null, error: "Portfolio name already taken for this user and fund." });
     }
     console.error("createUserPortfolio error:", err);
     return res.status(500).json({
-      data: null,
-      error:
-        err?.code === "P2028"
-          ? "Operation took too long. Try again or contact support."
-          : "Failed to create user-portfolio.",
+      data:  null,
+      error: err?.code === "P2028"
+        ? "Operation timed out. Please try again."
+        : "Failed to create user-portfolio.",
     });
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  LIST  GET /user-portfolios                                          */
+/* ------------------------------------------------------------------ */
 export async function listUserPortfolios(req: Request, res: Response) {
   try {
-    const { userId, portfolioId } = req.query as { userId?: string; portfolioId?: string };
-    const include = parseInclude(req.query);
+    const { userId, portfolioId, isActive } = req.query as {
+      userId?: string; portfolioId?: string; isActive?: string;
+    };
 
     const where: Prisma.UserPortfolioWhereInput = {
-      ...(userId ? { userId } : {}),
+      ...(userId      ? { userId }      : {}),
       ...(portfolioId ? { portfolioId } : {}),
+      ...(isActive !== undefined ? { isActive: isActive === "true" } : {}),
     };
 
     const items = await db.userPortfolio.findMany({
-      where: Object.keys(where).length ? where : undefined,
+      where:   Object.keys(where).length ? where : undefined,
       orderBy: { createdAt: "desc" },
-      include:{
-        user: { include: { wallet: true } },
-        portfolio: { include: { assets: { include: { asset: true } } } },
-        userAssets: {
-          include: {
-            portfolioAsset: {
-              include: {
-                asset: true}
-      }}},
-      },
+      include: parseInclude(req.query) ?? DEFAULT_INCLUDE,
     });
 
     return res.status(200).json({ data: items, error: null });
@@ -269,90 +449,19 @@ export async function listUserPortfolios(req: Request, res: Response) {
   }
 }
 
-
-// actions/user-portfolios.ts
-// export async function getUserPortfolioById(id: string) {
-//   try {
-//     // Try to find by UserPortfolio ID first
-//     let portfolio = await db.userPortfolio.findUnique({
-//       where: { id },
-//       include: {
-//         user: { include: { wallet: true } },
-//         portfolio: { include: { assets: { include: { asset: true } } } },
-//         userAssets: {
-//           include: {
-//             portfolioAsset: {
-//               include: {
-//                 asset: true
-//               }
-//             }
-//           }
-//         },
-//       },
-//     });
-
-//     // If not found, try finding by portfolioId
-//     if (!portfolio) {
-//       portfolio = await db.userPortfolio.findFirst({
-//         where: { portfolioId: id },
-//         include: {
-//           user: { include: { wallet: true } },
-//           portfolio: { include: { assets: { include: { asset: true } } } },
-//           userAssets: {
-//             include: {
-//               portfolioAsset: {
-//                 include: {
-//                   asset: true
-//                 }
-//               }
-//             }
-//           },
-//         },
-//       });
-//     }
-
-//     if (!portfolio) {
-//       return { data: null, error: "Portfolio not found" };
-//     }
-
-//     return { data: portfolio, error: null };
-//   } catch (err) {
-//     console.error("getUserPortfolioById error:", err);
-//     return { data: null, error: "Failed to load portfolio." };
-//   }
-// }
-
-
-/* --------------------------------------------
-   GET BY ID (GET /user-portfolios/:id)
---------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  GET BY ID  GET /user-portfolios/:id                                 */
+/* ------------------------------------------------------------------ */
 export async function getUserPortfolioById(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
 
-    const include = parseInclude(req.query) ?? {
-      user: { include: { wallet: true } },
-      portfolio: { include: { assets: { include: { asset: true } } } },
-      userAssets: {
-        include: {
-          portfolioAsset: {
-            include: {
-              asset: true,
-              portfolio: true
-            }
-          }
-        }
-      },
-    };
+    const include = parseInclude(req.query) ?? DEFAULT_INCLUDE;
 
-    // Try to find by UserPortfolio ID first
-    let portfolio = await db.userPortfolio.findUnique({
-      where: { id },
-      include,
-    });
+    let portfolio = await db.userPortfolio.findUnique({ where: { id }, include });
 
-    // If not found, try finding by portfolioId
+    // Fallback: treat id as a portfolioId (template)
     if (!portfolio) {
       portfolio = await db.userPortfolio.findFirst({
         where: { portfolioId: id },
@@ -361,7 +470,7 @@ export async function getUserPortfolioById(req: Request, res: Response) {
     }
 
     if (!portfolio) {
-      return res.status(404).json({ data: null, error: "Portfolio not found" });
+      return res.status(404).json({ data: null, error: "Portfolio not found." });
     }
 
     return res.status(200).json({ data: portfolio, error: null });
@@ -371,119 +480,190 @@ export async function getUserPortfolioById(req: Request, res: Response) {
   }
 }
 
-
-
+/* ------------------------------------------------------------------ */
+/*  UPDATE  PATCH /user-portfolios/:id                                  */
+/* ------------------------------------------------------------------ */
+/**
+ * Supports:
+ *  - customName        rename the enrollment
+ *  - assetAllocations  upsert individual asset positions + recompute totals
+ *  - recompute=true    re-derive all positions from current wallet NAV
+ *  - isActive          activate / deactivate
+ */
 export async function updateUserPortfolio(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
 
-    const { portfolioId, recompute, resetAssets } = req.body as Partial<{
-      portfolioId: string;
+    const { customName, recompute, assetAllocations, isActive } = req.body as Partial<{
+      customName: string;
       recompute: boolean;
-      resetAssets: boolean;
+      isActive: boolean;
+      assetAllocations: Array<{
+        assetId: string;
+        allocationPercentage: number;
+        costPerShare: number;
+      }>;
     }>;
 
     const current = await db.userPortfolio.findUnique({
-      where: { id },
-      include: { user: true },
+      where:   { id },
+      include: { wallet: true },
     });
     if (!current) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
 
     const updated = await db.$transaction(async (tx) => {
-      // If changing portfolio, validate and update
-      if (portfolioId && portfolioId !== current.portfolioId) {
-        // ensure target exists
-        const target = await tx.portfolio.findUnique({
-          where: { id: portfolioId },
-          include: { assets: true },
-        });
-        if (!target) throw new Error("TARGET_PORTFOLIO_NOT_FOUND");
-
-        // enforce uniqueness for (userId, portfolioId)
+      // Rename
+      if (customName?.trim() && customName.trim() !== current.customName) {
         const conflict = await tx.userPortfolio.findFirst({
-          where: { userId: current.userId, portfolioId, NOT: { id } },
+          where: { userId: current.userId, portfolioId: current.portfolioId, customName: customName.trim(), NOT: { id } },
           select: { id: true },
         });
-        if (conflict) throw new Error("DUPLICATE_USER_PORTFOLIO");
+        if (conflict) throw new Error("DUPLICATE_CUSTOM_NAME");
 
-        await tx.userPortfolio.update({ where: { id }, data: { portfolioId } });
+        await tx.userPortfolio.update({ where: { id }, data: { customName: customName.trim() } });
       }
 
-      // Reset assets (drop + rebuild) OR just recompute
-      if (resetAssets || (portfolioId && portfolioId !== current.portfolioId)) {
-        await tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
-        await recomputeUPAsFor(id, tx);
-      } else if (recompute) {
+      // Toggle active
+      if (isActive !== undefined) {
+        await tx.userPortfolio.update({ where: { id }, data: { isActive } });
+      }
+
+      // Upsert individual asset allocations
+      if (assetAllocations?.length) {
+        const nav = toNumber(current.wallet?.netAssetValue, 0);
+
+        const assetIds = assetAllocations.map((a) => a.assetId);
+        const assets   = await tx.asset.findMany({
+          where:  { id: { in: assetIds } },
+          select: { id: true, closePrice: true },
+        });
+        const assetMap = new Map(assets.map((a) => [a.id, a]));
+
+        for (const a of assetAllocations) {
+          const asset = assetMap.get(a.assetId);
+          if (!asset) continue;
+
+          const { costPrice, stock, closeValue, lossGain } = computeUPA(
+            nav,
+            a.allocationPercentage,
+            a.costPerShare,
+            toNumber(asset.closePrice, 0)
+          );
+
+          await tx.userPortfolioAsset.upsert({
+            where:  { userPortfolioId_assetId: { userPortfolioId: id, assetId: a.assetId } },
+            update: { allocationPercentage: a.allocationPercentage, costPerShare: a.costPerShare, costPrice, stock, closeValue, lossGain },
+            create: { userPortfolioId: id, assetId: a.assetId, allocationPercentage: a.allocationPercentage, costPerShare: a.costPerShare, costPrice, stock, closeValue, lossGain },
+          });
+        }
+
+        // Recompute portfolio totals
+        const allAssets = await tx.userPortfolioAsset.findMany({
+          where:  { userPortfolioId: id },
+          select: { closeValue: true, costPrice: true },
+        });
+        const totalClose = allAssets.reduce((s, a) => s + toNumber(a.closeValue, 0), 0);
+        const totalCost  = allAssets.reduce((s, a) => s + toNumber(a.costPrice, 0), 0);
+
+        await tx.userPortfolio.update({
+          where: { id },
+          data:  { portfolioValue: totalClose, totalInvested: totalCost, totalLossGain: totalClose - totalCost },
+        });
+        await tx.portfolioWallet.updateMany({
+          where: { userPortfolioId: id },
+          data:  { netAssetValue: totalClose },
+        });
+      }
+
+      // Full recompute from current wallet NAV
+      if (recompute) {
         await recomputeUPAsFor(id, tx);
       }
+
+      // Sync master wallet
+      await syncMasterWallet(tx, current.userId);
 
       return tx.userPortfolio.findUnique({
-        where: { id },
-        include: parseInclude(req.query),
+        where:   { id },
+        include: parseInclude(req.query) ?? DEFAULT_INCLUDE,
       });
     });
 
     return res.status(200).json({ data: updated, error: null });
   } catch (err: any) {
-    if (err?.message === "TARGET_PORTFOLIO_NOT_FOUND") {
-      return res.status(404).json({ data: null, error: "Target portfolio not found." });
-    }
-    if (err?.message === "DUPLICATE_USER_PORTFOLIO") {
-      return res.status(409).json({ data: null, error: "This user already has that portfolio." });
+    if (err?.message === "DUPLICATE_CUSTOM_NAME") {
+      return res.status(409).json({ data: null, error: "You already have a portfolio with that name for this fund." });
     }
     if (err?.code === "P2025") {
       return res.status(404).json({ data: null, error: "UserPortfolio not found." });
     }
     if (err?.code === "P2002") {
-      return res.status(409).json({ data: null, error: "This user already has that portfolio." });
+      return res.status(409).json({ data: null, error: "Duplicate portfolio name." });
     }
     console.error("updateUserPortfolio error:", err);
     return res.status(500).json({ data: null, error: "Failed to update user-portfolio." });
   }
 }
 
-/* --------------------------------------------
-   RECOMPUTE (POST /user-portfolios/:id/recompute)
---------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  RECOMPUTE  POST /user-portfolios/:id/recompute                      */
+/* ------------------------------------------------------------------ */
 export async function recomputeUserPortfolio(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
 
-    const exists = await db.userPortfolio.findUnique({ where: { id } });
+    const exists = await db.userPortfolio.findUnique({
+      where:  { id },
+      select: { id: true, userId: true },
+    });
     if (!exists) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
 
     const result = await db.$transaction(async (tx) => {
       const r = await recomputeUPAsFor(id, tx);
+      await syncMasterWallet(tx, exists.userId);
       const fresh = await tx.userPortfolio.findUnique({
-        where: { id },
-        include: parseInclude(req.query),
+        where:   { id },
+        include: parseInclude(req.query) ?? DEFAULT_INCLUDE,
       });
       return { r, fresh };
     });
 
-    return res.status(200).json({ data: { recompute: result.r, userPortfolio: result.fresh }, error: null });
+    return res.status(200).json({
+      data:  { recompute: result.r, userPortfolio: result.fresh },
+      error: null,
+    });
   } catch (err) {
     console.error("recomputeUserPortfolio error:", err);
     return res.status(500).json({ data: null, error: "Failed to recompute user-portfolio." });
   }
 }
 
-/* --------------------------------------------
-   DELETE (DELETE /user-portfolios/:id)
---------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  DELETE  DELETE /user-portfolios/:id                                 */
+/* ------------------------------------------------------------------ */
 export async function deleteUserPortfolio(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ data: null, error: "Missing id." });
 
-    await db.$transaction([
-      db.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } }),
-      db.userPortfolio.delete({ where: { id } }),
-    ]);
+    const up = await db.userPortfolio.findUnique({
+      where:  { id },
+      select: { id: true, userId: true },
+    });
+    if (!up) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
 
-    return res.status(200).json({ data: null, message: "UserPortfolio deleted.", error: null });
+    await db.$transaction(async (tx) => {
+      // Cascade order: assets → sub-portfolio assets → sub-portfolios → wallet → portfolio
+      // (Prisma onDelete: Cascade handles most, but explicit ordering avoids FK issues)
+      await tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
+      await tx.userPortfolio.delete({ where: { id } });
+      // Sync master wallet after removal
+      await syncMasterWallet(tx, up.userId);
+    });
+
+    return res.status(200).json({ data: null, error: null, message: "UserPortfolio deleted." });
   } catch (err: any) {
     if (err?.code === "P2025") {
       return res.status(404).json({ data: null, error: "UserPortfolio not found." });

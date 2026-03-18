@@ -17,6 +17,7 @@
 
 // src/routes/user.routes.ts
 import { createUser, deleteUser, getAllUsers, getCurrentUser, getUserById, loginUser, updateUser } from "@/controllers/users";
+import { registrationLimiter } from "@/middleware/rate-limit";
 import { authenticateToken } from "@/utils/auth";
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -36,8 +37,9 @@ const loginLimiter = rateLimit({
 });
 
 // Routes
-userRouter.post("/register", createUser);
-userRouter.post("/login", loginLimiter, loginUser); // ✅ limiter applied here
+// userRouter.post("/register", createUser);
+userRouter.post("/register", registrationLimiter, createUser);
+userRouter.post("/login", loginLimiter, loginUser); 
 userRouter.get("/users", getAllUsers);
 userRouter.delete("/users/:id", deleteUser);
 userRouter.get("/me", authenticateToken, getCurrentUser);

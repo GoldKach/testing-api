@@ -1,3 +1,4 @@
+
 // src/jobs/portfolio-report-cron.ts
 import cron from "node-cron";
 import { generateDailyReportsForAllPortfolios } from "@/controllers/portfolio-performance-reports";
@@ -16,7 +17,6 @@ async function executePortfolioReportJob(label: string) {
   try {
     console.log("🚀 Starting daily report generation for all portfolios...");
 
-    // 🔥 THIS is the line you asked for, now wired correctly:
     const result = await generateDailyReportsForAllPortfolios();
     // result = { success, failed, total, errors }
 
@@ -40,17 +40,16 @@ async function executePortfolioReportJob(label: string) {
   }
 }
 
-
-export function schedule2MinutePortfolioReports() {
+export function schedule30MinutePortfolioReports() {
   console.log("============================================================");
-  console.log("📅 2-MINUTE PORTFOLIO REPORT SCHEDULER INITIALIZED");
-  console.log("⏰ Reports will be generated EVERY 2 MINUTES");
+  console.log("📅 30-MINUTE PORTFOLIO REPORT SCHEDULER INITIALIZED");
+  console.log("⏰ Reports will be generated EVERY 30 MINUTES");
   console.log("⚠️  WARNING: This is for TESTING ONLY!");
   console.log("⚠️  For production, switch to the daily scheduler (1:00 AM).");
   console.log("============================================================");
 
-  cron.schedule("*/2 * * * *", async () => {
-    await executePortfolioReportJob("2-MINUTE");
+  cron.schedule("*/30 * * * *", async () => {
+    await executePortfolioReportJob("30-MINUTE");
   });
 }
 
@@ -60,6 +59,12 @@ export function schedule2MinutePortfolioReports() {
 export function schedule1MinutePortfolioReports() {
   cron.schedule("* * * * *", async () => {
     await executePortfolioReportJob("1-MINUTE");
+  });
+}
+
+export function schedule2MinutePortfolioReports() {
+  cron.schedule("*/2 * * * *", async () => {
+    await executePortfolioReportJob("2-MINUTE");
   });
 }
 
@@ -99,7 +104,7 @@ export function scheduleDailyPortfolioReports() {
 
 /**
  * Helper: choose schedule based on env
- * CRON_MODE=2-minute | 1-minute | 5-minute | 10-minute | daily
+ * CRON_MODE=30-minute | 2-minute | 1-minute | 5-minute | 10-minute | 30-second | daily
  */
 export function startPortfolioReportCronFromEnv() {
   if (process.env.NODE_ENV === "test") {
@@ -107,7 +112,7 @@ export function startPortfolioReportCronFromEnv() {
     return;
   }
 
-  const mode = (process.env.CRON_MODE || "2-minute").toLowerCase();
+  const mode = (process.env.CRON_MODE || "30-minute").toLowerCase();
 
   switch (mode) {
     case "daily":
@@ -116,6 +121,10 @@ export function startPortfolioReportCronFromEnv() {
     case "1-minute":
     case "1min":
       schedule1MinutePortfolioReports();
+      break;
+    case "2-minute":
+    case "2min":
+      schedule2MinutePortfolioReports();
       break;
     case "5-minute":
     case "5min":
@@ -129,10 +138,10 @@ export function startPortfolioReportCronFromEnv() {
     case "30sec":
       schedule30SecondPortfolioReports();
       break;
-    case "2-minute":
-    case "2min":
+    case "30-minute":
+    case "30min":
     default:
-      schedule2MinutePortfolioReports();
+      schedule30MinutePortfolioReports();
       break;
   }
 

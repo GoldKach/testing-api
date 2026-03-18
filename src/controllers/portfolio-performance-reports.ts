@@ -1,233 +1,90 @@
-// src/controllers/portfolio-performance-reports.ts
-import type { Request, Response } from "express";
-import { db } from "@/db/db";
-import type { AssetClass, Prisma } from "@prisma/client";
+// // src/controllers/portfolio-performance-reports.ts
+// import type { Request, Response } from "express";
+// import { db } from "@/db/db";
+// import type { AssetClass, Prisma } from "@prisma/client";
 
-/* --------------------------------- Types --------------------------------- */
+// /* ------------------------------------------------------------------ */
+// /*  Types                                                               */
+// /* ------------------------------------------------------------------ */
 
-interface AssetBreakdown {
-  assetClass: AssetClass;
-  holdings: number;
-  totalCashValue: number;
-  percentage: number;
-}
+// interface AssetBreakdown {
+//   assetClass:     AssetClass;
+//   holdings:       number;
+//   totalCashValue: number;
+//   percentage:     number;
+// }
 
-export interface AssetDetailRow {
-  symbol: string | null;
-  description: string | null;
-  sector: string | null;
+// interface SubPortfolioSnapshot {
+//   subPortfolioId:  string;
+//   generation:      number;
+//   label:           string;
+//   amountInvested:  number;
+//   totalCostPrice:  number;
+//   totalCloseValue: number;
+//   totalLossGain:   number;
+//   totalFees:       number;
+//   cashAtBank:      number;
+// }
 
-  stocks: number;         // userAsset.quantity
-  allocation: number;     // userAsset.allocation
+// interface GeneratedReport {
+//   userPortfolioId:   string;
+//   reportDate:        Date;
+//   totalCostPrice:    number;
+//   totalCloseValue:   number;
+//   totalLossGain:     number;
+//   totalPercentage:   number;
+//   totalFees:         number;
+//   netAssetValue:     number;
+//   assetBreakdown:    AssetBreakdown[];
+//   subPortfolioSnapshots: SubPortfolioSnapshot[];
+// }
 
-  costPerShare: number;
-  costPrice: number;
-  closePrice: number;
-  closeValue: number;
-  lossGain: number;
-}
+// /* ------------------------------------------------------------------ */
+// /*  Asset classification                                                */
+// /* ------------------------------------------------------------------ */
 
+// function determineAssetClass(asset: any): AssetClass {
+//   if (asset.assetClass) return asset.assetClass as AssetClass;
 
+//   const symbol      = (asset.symbol      ?? "").toLowerCase();
+//   const description = (asset.description ?? "").toLowerCase();
+//   const sector      = (asset.sector      ?? "").toLowerCase();
 
-/* ----------------------- Asset Classification ----------------------- */
+//   if (
+//     description.includes("etf") ||
+//     description.includes("exchange traded fund") ||
+//     ["qqq", "spy", "voo", "iwm", "soxx", "xlk", "vti"].includes(symbol)
+//   ) return "ETFS";
 
-/**
- * Determine asset class from asset data
- * Customize this based on your classification rules
- */
-function determineAssetClass(asset: any): AssetClass {
-  // 1. Check if asset has explicit assetClass field
-  if (asset.assetClass) {
-    return asset.assetClass as AssetClass;
-  }
+//   if (sector.includes("real estate") || sector.includes("reit") || description.includes("reit"))
+//     return "REITS";
 
-  // 2. Check by symbol or description patterns
-  const symbol = (asset.symbol || "").toLowerCase();
-  const description = (asset.description || "").toLowerCase();
-  const sector = (asset.sector || "").toLowerCase();
+//   if (sector.includes("bond") || symbol.includes("bond") || description.includes("bond") || description.includes("treasury"))
+//     return "BONDS";
 
-  // ETFs - common patterns
-  if (
-    description.includes("etf") ||
-    description.includes("exchange traded fund") ||
-    ["qqq", "spy", "voo", "iwm", "soxx", "xlk", "vti"].includes(symbol)
-  ) {
-    return "ETFS";
-  }
+//   if (symbol === "cash" || description === "cash" || symbol === "usd")
+//     return "CASH";
 
-  // REITs - real estate
-  if (
-    sector.includes("real estate") ||
-    sector.includes("reit") ||
-    description.includes("reit")
-  ) {
-    return "REITS";
-  }
+//   return "EQUITIES";
+// }
 
-  // Bonds - fixed income
-  if (
-    sector.includes("bond") ||
-    symbol.includes("bond") ||
-    description.includes("bond") ||
-    description.includes("treasury")
-  ) {
-    return "BONDS";
-  }
+// /* ------------------------------------------------------------------ */
+// /*  Report generation                                                   */
+// /* ------------------------------------------------------------------ */
 
-  // Cash positions
-  if (symbol === "cash" || description === "cash" || symbol === "usd") {
-    return "CASH";
-  }
-
-  // Default to EQUITIES for stocks
-  return "EQUITIES";
-}
-
-/* ----------------------- Report Generation ----------------------- */
-
-/**
- * Generate a performance report for a single user portfolio
- */
-async function generatePortfolioReport(
-  userPortfolioId: string,
-  reportDate: Date = new Date()
-): Promise<any | null> {
-  try {
-    // Fetch the user portfolio with all assets
-    const userPortfolio = await db.userPortfolio.findUnique({
-      where: { id: userPortfolioId },
-      include: {
-        userAssets: {
-          include: {
-            portfolioAsset: {
-              include: {
-                asset: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    if (!userPortfolio) {
-      console.error(`UserPortfolio ${userPortfolioId} not found`);
-      return null;
-    }
-
-    // If no assets, still create report with zeros
-    if (userPortfolio.userAssets.length === 0) {
-      return {
-        userPortfolioId,
-        reportDate,
-        totalCostPrice: 0,
-        totalCloseValue: 0,
-        totalLossGain: 0,
-        totalPercentage: 0,
-        assetBreakdown: [],
-      };
-    }
-
-    // Calculate totals
-    let totalCostPrice = 0;
-    let totalCloseValue = 0;
-    let totalLossGain = 0;
-
-    // Group assets by class
-    const assetClassMap = new Map<
-      AssetClass,
-      { holdings: number; totalCashValue: number; assets: any[] }
-    >();
-
-    // Initialize all asset classes with zero values
-    const allAssetClasses: AssetClass[] = [
-      "EQUITIES",
-      "ETFS",
-      "REITS",
-      "BONDS",
-      "CASH",
-      "OTHERS",
-    ];
-
-    allAssetClasses.forEach((assetClass) => {
-      assetClassMap.set(assetClass, {
-        holdings: 0,
-        totalCashValue: 0,
-        assets: [],
-      });
-    });
-
-    // Process each asset
-    for (const userAsset of userPortfolio.userAssets) {
-      const asset = userAsset.portfolioAsset.asset;
-      const closeValue = userAsset.closeValue || 0;
-      const costPrice = userAsset.costPrice || 0;
-      const lossGain = userAsset.lossGain || 0;
-
-      totalCostPrice += costPrice;
-      totalCloseValue += closeValue;
-      totalLossGain += lossGain;
-
-      // Determine asset class
-      const assetClass = determineAssetClass(asset);
-
-      // Get or create the asset class entry
-      const classData = assetClassMap.get(assetClass)!;
-      classData.holdings += 1;
-      classData.totalCashValue += closeValue;
-      classData.assets.push(asset);
-    }
-
-    // Calculate percentages and create breakdown
-    const assetBreakdown: AssetBreakdown[] = [];
-
-    for (const [assetClass, data] of assetClassMap.entries()) {
-      const percentage =
-        totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0;
-
-      assetBreakdown.push({
-        assetClass,
-        holdings: data.holdings,
-        totalCashValue: data.totalCashValue,
-        percentage,
-      });
-    }
-
-    const totalPercentage =
-      totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
-
-    return {
-      userPortfolioId,
-      reportDate,
-      totalCostPrice,
-      totalCloseValue,
-      totalLossGain,
-      totalPercentage,
-      assetBreakdown,
-    };
-  } catch (error) {
-    console.error("Error generating portfolio report:", error);
-    return null;
-  }
-}
-
-
-// export async function generatePortfolioReport(
+// async function generatePortfolioReport(
 //   userPortfolioId: string,
 //   reportDate: Date = new Date()
-// ): Promise<any | null> {
+// ): Promise<GeneratedReport | null> {
 //   try {
-//     // 1. Fetch portfolio with all related assets
 //     const userPortfolio = await db.userPortfolio.findUnique({
 //       where: { id: userPortfolioId },
 //       include: {
-//         userAssets: {
-//           include: {
-//             portfolioAsset: {
-//               include: {
-//                 asset: true, // Symbol, description, sector, asset-level cost/close etc.
-//               },
-//             },
-//           },
+//         wallet:     true,
+//         userAssets: { include: { asset: true } },
+//         subPortfolios: {
+//           orderBy: { generation: "asc" },
+//           include: { assets: { include: { asset: true } } },
 //         },
 //       },
 //     });
@@ -237,124 +94,68 @@ async function generatePortfolioReport(
 //       return null;
 //     }
 
-//     if (!userPortfolio.userAssets || userPortfolio.userAssets.length === 0) {
+//     const totalFees    = userPortfolio.wallet?.totalFees    ?? 0;
+//     const walletBalance = userPortfolio.wallet?.balance    ?? 0;
+
+//     if (userPortfolio.userAssets.length === 0) {
 //       return {
 //         userPortfolioId,
 //         reportDate,
-//         totalCostPrice: 0,
+//         totalCostPrice:  0,
 //         totalCloseValue: 0,
-//         totalLossGain: 0,
+//         totalLossGain:   0,
 //         totalPercentage: 0,
-//         assetBreakdown: [],
-//         assetDetails: [],
-//         screenshotUrl: "/mnt/data/355f4e58-7df7-4581-a19a-2c6df92316b9.png",
+//         totalFees,
+//         netAssetValue:   walletBalance - totalFees,
+//         assetBreakdown:  [],
+//         subPortfolioSnapshots: [],
 //       };
 //     }
 
-//     let totalCostPrice = 0;
+//     // --- Live merged (X2) totals ---
+//     let totalCostPrice  = 0;
 //     let totalCloseValue = 0;
-//     let totalLossGain = 0;
+//     let totalLossGain   = 0;
 
-//     const assetClassMap = new Map<
-//       AssetClass,
-//       { holdings: number; totalCashValue: number; assets: any[] }
-//     >();
+//     const ALL_CLASSES: AssetClass[] = ["EQUITIES", "ETFS", "REITS", "BONDS", "CASH", "OTHERS"];
+//     const classMap = new Map<AssetClass, { holdings: number; totalCashValue: number }>();
+//     ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
 
-//     const allAssetClasses: AssetClass[] = [
-//       "EQUITIES",
-//       "ETFS",
-//       "REITS",
-//       "BONDS",
-//       "CASH",
-//       "OTHERS",
-//     ];
+//     for (const ua of userPortfolio.userAssets) {
+//       totalCostPrice  += ua.costPrice  ?? 0;
+//       totalCloseValue += ua.closeValue ?? 0;
+//       totalLossGain   += ua.lossGain   ?? 0;
 
-//     allAssetClasses.forEach((assetClass) => {
-//       assetClassMap.set(assetClass, {
-//         holdings: 0,
-//         totalCashValue: 0,
-//         assets: [],
-//       });
-//     });
-
-//     // Keep using the interface you already have
-//     const assetDetails: AssetDetailRow[] = [];
-
-//     for (const userAsset of userPortfolio.userAssets) {
-//       const assetRecord = userAsset.portfolioAsset?.asset;
-
-//       const shares =
-//         Number(userAsset.quantity ?? userAsset.shares ?? userAsset.amount ?? 0) || 0;
-
-//       const costPerShare = Number(
-//         userAsset.costPerShare ?? assetRecord?.costPerShare ?? 0
-//       );
-
-//       const closePrice = Number(userAsset.closePrice ?? assetRecord?.closePrice ?? 0);
-
-//       const costPrice =
-//         Number(userAsset.costPrice ?? 0) || Number((shares * costPerShare) || 0);
-
-//       const closeValue =
-//         Number(userAsset.closeValue ?? 0) || Number((shares * closePrice) || 0);
-
-//       const lossGain =
-//         Number(userAsset.lossGain ?? 0) || Number(closeValue - costPrice);
-
-//       totalCostPrice += costPrice;
-//       totalCloseValue += closeValue;
-//       totalLossGain += lossGain;
-
-//       const assetClass = determineAssetClass(assetRecord) as AssetClass;
-//       const classData = assetClassMap.get(assetClass)!;
-
-//       // If holdings should be number of distinct assets use +1, if total shares use += shares
-//       classData.holdings += 1; // <-- counting distinct assets
-//       classData.totalCashValue += closeValue;
-//       classData.assets.push(assetRecord);
-
-//       // **Fixed mapping: `stocks` is required by AssetDetailRow, so assign shares => stocks**
-//       const detail: AssetDetailRow = {
-//         symbol: assetRecord?.symbol ?? null,
-//         description: assetRecord?.description ?? null,
-//         sector: assetRecord?.sector ?? null,
-
-//         // required property in your type
-//         stocks: shares,                // <-- mapped here
-
-//         // keep allocation as number (percent)
-//         allocation: Number(userAsset.allocation ?? assetRecord?.allocationPercentage ?? 0),
-
-//         costPerShare,
-//         costPrice,
-//         closePrice,
-//         closeValue,
-//         lossGain,
-
-//         // optional ids (your AssetDetailRow may include these keys)
-//         assetId: assetRecord?.id,
-//         portfolioAssetId: userAsset.portfolioAsset?.id,
-//       } as AssetDetailRow;
-
-//       assetDetails.push(detail);
+//       const cls  = determineAssetClass(ua.asset);
+//       const entry = classMap.get(cls)!;
+//       entry.holdings       += 1;
+//       entry.totalCashValue += ua.closeValue ?? 0;
 //     }
 
-//     const assetBreakdown: AssetBreakdown[] = [];
-
-//     for (const [assetClass, data] of assetClassMap.entries()) {
-//       const percentage =
-//         totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0;
-
-//       assetBreakdown.push({
+//     const assetBreakdown: AssetBreakdown[] = Array.from(classMap.entries()).map(
+//       ([assetClass, data]) => ({
 //         assetClass,
-//         holdings: data.holdings,
+//         holdings:       data.holdings,
 //         totalCashValue: data.totalCashValue,
-//         percentage,
-//       });
-//     }
+//         percentage:     totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0,
+//       })
+//     );
 
-//     const totalPercentage =
-//       totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
+//     const totalPercentage = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
+//     const netAssetValue   = totalCloseValue - totalFees;
+
+//     // --- Sub-portfolio snapshots (X, X1, X2-source…) ---
+//     const subPortfolioSnapshots: SubPortfolioSnapshot[] = userPortfolio.subPortfolios.map((sub) => ({
+//       subPortfolioId:  sub.id,
+//       generation:      sub.generation,
+//       label:           sub.label,
+//       amountInvested:  sub.amountInvested,
+//       totalCostPrice:  sub.totalCostPrice,
+//       totalCloseValue: sub.totalCloseValue,
+//       totalLossGain:   sub.totalLossGain,
+//       totalFees:       sub.totalFees,
+//       cashAtBank:      sub.cashAtBank,
+//     }));
 
 //     return {
 //       userPortfolioId,
@@ -363,9 +164,10 @@ async function generatePortfolioReport(
 //       totalCloseValue,
 //       totalLossGain,
 //       totalPercentage,
+//       totalFees,
+//       netAssetValue,
 //       assetBreakdown,
-//       assetDetails,
-//       screenshotUrl: "/mnt/data/355f4e58-7df7-4581-a19a-2c6df92316b9.png",
+//       subPortfolioSnapshots,
 //     };
 //   } catch (error) {
 //     console.error("Error generating portfolio report:", error);
@@ -373,35 +175,587 @@ async function generatePortfolioReport(
 //   }
 // }
 
+// async function savePortfolioReport(report: GeneratedReport): Promise<string | null> {
+//   try {
+//     const saved = await db.userPortfolioPerformanceReport.create({
+//       data: {
+//         userPortfolioId: report.userPortfolioId,
+//         reportDate:      report.reportDate,
+//         totalCostPrice:  report.totalCostPrice,
+//         totalCloseValue: report.totalCloseValue,
+//         totalLossGain:   report.totalLossGain,
+//         totalPercentage: report.totalPercentage,
+//         totalFees:       report.totalFees,
+//         netAssetValue:   report.netAssetValue,
+//         assetBreakdown: {
+//           create: report.assetBreakdown.map((b) => ({
+//             assetClass:     b.assetClass,
+//             holdings:       b.holdings,
+//             totalCashValue: b.totalCashValue,
+//             percentage:     b.percentage,
+//           })),
+//         },
+//         subPortfolioSnapshots: {
+//           create: report.subPortfolioSnapshots.map((s) => ({
+//             subPortfolioId:  s.subPortfolioId,
+//             generation:      s.generation,
+//             label:           s.label,
+//             amountInvested:  s.amountInvested,
+//             totalCostPrice:  s.totalCostPrice,
+//             totalCloseValue: s.totalCloseValue,
+//             totalLossGain:   s.totalLossGain,
+//             totalFees:       s.totalFees,
+//             cashAtBank:      s.cashAtBank,
+//           })),
+//         },
+//       },
+//     });
+
+//     return saved.id;
+//   } catch (error) {
+//     console.error("Error saving portfolio report:", error);
+//     return null;
+//   }
+// }
+
+// async function generateAndSaveReport(
+//   userPortfolioId: string,
+//   reportDate: Date = new Date()
+// ): Promise<string | null> {
+//   const report = await generatePortfolioReport(userPortfolioId, reportDate);
+//   if (!report) return null;
+//   return savePortfolioReport(report);
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  Cron helper — called by the daily job                               */
+// /* ------------------------------------------------------------------ */
+// export async function generateDailyReportsForAllPortfolios(): Promise<{
+//   success: number; failed: number; total: number; errors: string[];
+// }> {
+//   console.log("🚀 Starting daily report generation...");
+
+//   const allPortfolios = await db.userPortfolio.findMany({
+//     where:  { isActive: true },
+//     select: { id: true, userId: true },
+//   });
+
+//   let success = 0, failed = 0;
+//   const errors: string[] = [];
+
+//   const reportDate = new Date();
+//   reportDate.setHours(0, 0, 0, 0);
+
+//   for (const portfolio of allPortfolios) {
+//     try {
+//       const existing = await db.userPortfolioPerformanceReport.findFirst({
+//         where: {
+//           userPortfolioId: portfolio.id,
+//           reportDate: {
+//             gte: reportDate,
+//             lt:  new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
+//           },
+//         },
+//         select: { id: true },
+//       });
+
+//       if (existing) { success++; continue; }
+
+//       const reportId = await generateAndSaveReport(portfolio.id, reportDate);
+//       if (reportId) { success++; }
+//       else {
+//         failed++;
+//         errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
+//       }
+//     } catch (error: any) {
+//       failed++;
+//       errors.push(`Portfolio ${portfolio.id}: ${error.message}`);
+//     }
+//   }
+
+//   console.log(`📊 Daily reports — total: ${allPortfolios.length}, ✅ ${success}, ❌ ${failed}`);
+//   return { success, failed, total: allPortfolios.length, errors };
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  Shared report include                                               */
+// /* ------------------------------------------------------------------ */
+// const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
+//   assetBreakdown:        { orderBy: { assetClass: "asc" } },
+//   subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+// };
+
+// /* ------------------------------------------------------------------ */
+// /*  POST /portfolio-performance-reports/generate                        */
+// /* ------------------------------------------------------------------ */
+// export async function generatePerformanceReport(req: Request, res: Response) {
+//   try {
+//     const { userPortfolioId, reportDate } = req.body as {
+//       userPortfolioId?: string; reportDate?: string;
+//     };
+
+//     if (!userPortfolioId) {
+//       return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+//     }
+
+//     const portfolio = await db.userPortfolio.findUnique({
+//       where:  { id: userPortfolioId },
+//       select: { id: true },
+//     });
+//     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
+
+//     const date = reportDate ? new Date(reportDate) : new Date();
+//     date.setHours(0, 0, 0, 0);
+
+//     const reportId = await generateAndSaveReport(userPortfolioId, date);
+//     if (!reportId) {
+//       return res.status(500).json({ data: null, error: "Failed to generate report" });
+//     }
+
+//     const report = await db.userPortfolioPerformanceReport.findUnique({
+//       where:   { id: reportId },
+//       include: REPORT_INCLUDE,
+//     });
+
+//     return res.status(201).json({ data: report, error: null });
+//   } catch (error) {
+//     console.error("generatePerformanceReport error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to generate report" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  POST /portfolio-performance-reports/generate-all                    */
+// /* ------------------------------------------------------------------ */
+// export async function generateAllPerformanceReports(req: Request, res: Response) {
+//   try {
+//     const result = await generateDailyReportsForAllPortfolios();
+//     return res.status(200).json({
+//       data:    result,
+//       message: `Generated ${result.success} reports, ${result.failed} failed`,
+//       error:   null,
+//     });
+//   } catch (error) {
+//     console.error("generateAllPerformanceReports error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to generate all reports" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  GET /portfolio-performance-reports/latest/:userPortfolioId          */
+// /* ------------------------------------------------------------------ */
+// export async function getLatestPerformanceReport(req: Request, res: Response) {
+//   try {
+//     const { userPortfolioId } = req.params;
+//     if (!userPortfolioId) {
+//       return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+//     }
+
+//     const report = await db.userPortfolioPerformanceReport.findFirst({
+//       where:   { userPortfolioId },
+//       orderBy: { reportDate: "desc" },
+//       include: REPORT_INCLUDE,
+//     });
+
+//     if (!report) {
+//       return res.status(404).json({ data: null, error: "No reports found for this portfolio" });
+//     }
+
+//     return res.status(200).json({ data: report, error: null });
+//   } catch (error) {
+//     console.error("getLatestPerformanceReport error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to fetch latest report" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  GET /portfolio-performance-reports                                   */
+// /* ------------------------------------------------------------------ */
+// export async function listPerformanceReports(req: Request, res: Response) {
+//   try {
+//     const { userPortfolioId, period, startDate, endDate } = req.query as {
+//       userPortfolioId?: string; period?: "daily" | "weekly" | "monthly";
+//       startDate?: string; endDate?: string;
+//     };
+
+//     if (!userPortfolioId) {
+//       return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+//     }
+
+//     const reportPeriod = period ?? "daily";
+//     const now = new Date();
+//     let start = startDate ? new Date(startDate) : new Date(now);
+//     const end = endDate ? new Date(endDate) : now;
+
+//     if (!startDate) {
+//       switch (reportPeriod) {
+//         case "daily":   start.setDate(now.getDate() - 1);     break;
+//         case "weekly":  start.setDate(now.getDate() - 7);     break;
+//         case "monthly": start.setMonth(now.getMonth() - 1);   break;
+//       }
+//     }
+
+//     const reports = await db.userPortfolioPerformanceReport.findMany({
+//       where: {
+//         userPortfolioId,
+//         reportDate: { gte: start, lte: end },
+//       },
+//       include: {
+//         ...REPORT_INCLUDE,
+//         userPortfolio: {
+//           select: {
+//             id: true, customName: true,
+//             portfolio: { select: { id: true, name: true } },
+//             userAssets: { include: { asset: true } },
+//           },
+//         },
+//       },
+//       orderBy: { reportDate: "desc" },
+//     });
+
+//     return res.status(200).json({
+//       data: reports,
+//       meta: { count: reports.length, period: reportPeriod, startDate: start, endDate: end },
+//       error: null,
+//     });
+//   } catch (error) {
+//     console.error("listPerformanceReports error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to fetch performance reports" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  GET /portfolio-performance-reports/:id                               */
+// /* ------------------------------------------------------------------ */
+// export async function getPerformanceReportById(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+
+//     const report = await db.userPortfolioPerformanceReport.findUnique({
+//       where:   { id },
+//       include: {
+//         ...REPORT_INCLUDE,
+//         userPortfolio: {
+//           include: {
+//             portfolio: true,
+//             user: { select: { id: true, firstName: true, lastName: true, email: true } },
+//           },
+//         },
+//       },
+//     });
+
+//     if (!report) return res.status(404).json({ data: null, error: "Report not found" });
+//     return res.status(200).json({ data: report, error: null });
+//   } catch (error) {
+//     console.error("getPerformanceReportById error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to fetch report" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  GET /portfolio-performance-reports/stats/:userPortfolioId           */
+// /* ------------------------------------------------------------------ */
+// export async function getPerformanceStatistics(req: Request, res: Response) {
+//   try {
+//     const { userPortfolioId } = req.params;
+//     const { period } = req.query as { period?: "daily" | "weekly" | "monthly" };
+
+//     const reportPeriod = period ?? "monthly";
+//     const now   = new Date();
+//     const start = new Date(now);
+
+//     switch (reportPeriod) {
+//       case "daily":   start.setDate(now.getDate() - 1);   break;
+//       case "weekly":  start.setDate(now.getDate() - 7);   break;
+//       case "monthly": start.setMonth(now.getMonth() - 1); break;
+//     }
+
+//     const reports = await db.userPortfolioPerformanceReport.findMany({
+//       where:   { userPortfolioId, reportDate: { gte: start, lte: now } },
+//       orderBy: { reportDate: "desc" },
+//     });
+
+//     if (!reports.length) {
+//       return res.status(404).json({ data: null, error: "No reports found for this period" });
+//     }
+
+//     const latest  = reports[0];
+//     const oldest  = reports[reports.length - 1];
+//     const totalGrowth       = latest.totalCloseValue - oldest.totalCloseValue;
+//     const growthPercentage  = oldest.totalCloseValue > 0 ? (totalGrowth / oldest.totalCloseValue) * 100 : 0;
+//     const avgDailyGain      = reports.reduce((s, r) => s + r.totalLossGain, 0) / reports.length;
+//     const bestDay           = reports.reduce((b, r) => r.totalLossGain > b.totalLossGain ? r : b);
+//     const worstDay          = reports.reduce((w, r) => r.totalLossGain < w.totalLossGain ? r : w);
+
+//     return res.status(200).json({
+//       data: {
+//         period:            reportPeriod,
+//         reportCount:       reports.length,
+//         currentValue:      latest.totalCloseValue,
+//         currentNAV:        latest.netAssetValue,
+//         startValue:        oldest.totalCloseValue,
+//         totalGrowth,
+//         growthPercentage,
+//         avgDailyGain,
+//         totalFees:         latest.totalFees,
+//         bestDay:  { date: bestDay.reportDate,  gain: bestDay.totalLossGain,  percentage: bestDay.totalPercentage  },
+//         worstDay: { date: worstDay.reportDate, loss: worstDay.totalLossGain, percentage: worstDay.totalPercentage },
+//       },
+//       error: null,
+//     });
+//   } catch (error) {
+//     console.error("getPerformanceStatistics error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to calculate statistics" });
+//   }
+// }
+
+// /* ------------------------------------------------------------------ */
+// /*  DELETE /portfolio-performance-reports/cleanup                       */
+// /* ------------------------------------------------------------------ */
+// export async function cleanupPerformanceReports(req: Request, res: Response) {
+//   try {
+//     const { daysToKeep } = req.body as { daysToKeep?: number };
+//     const days = daysToKeep ?? 90;
+
+//     const cutoff = new Date();
+//     cutoff.setDate(cutoff.getDate() - days);
+
+//     const deleted = await db.userPortfolioPerformanceReport.deleteMany({
+//       where: { reportDate: { lt: cutoff } },
+//     });
+
+//     return res.status(200).json({
+//       data:    { deletedCount: deleted.count },
+//       message: `Deleted ${deleted.count} old reports`,
+//       error:   null,
+//     });
+//   } catch (error) {
+//     console.error("cleanupPerformanceReports error:", error);
+//     return res.status(500).json({ data: null, error: "Failed to cleanup old reports" });
+//   }
+// }
 
 
+// src/controllers/portfolio-performance-reports.ts
+import type { Request, Response } from "express";
+import { db } from "@/db/db";
+import type { AssetClass, Prisma } from "@prisma/client";
 
-/**
- * Save a generated report to the database
- */
-async function savePortfolioReport(
-  report:any
-): Promise<string | null> {
+/* ------------------------------------------------------------------ */
+/*  Types                                                               */
+/* ------------------------------------------------------------------ */
+
+interface AssetBreakdown {
+  assetClass:     AssetClass;
+  holdings:       number;
+  totalCashValue: number;
+  percentage:     number;
+}
+
+interface SubPortfolioSnapshot {
+  subPortfolioId:  string;
+  generation:      number;
+  label:           string;
+  amountInvested:  number;
+  totalCostPrice:  number;
+  totalCloseValue: number;
+  totalLossGain:   number;
+  totalFees:       number;
+  cashAtBank:      number;
+}
+
+interface GeneratedReport {
+  userPortfolioId:      string;
+  reportDate:           Date;
+  totalCostPrice:       number;
+  totalCloseValue:      number;
+  totalLossGain:        number;
+  totalPercentage:      number;
+  totalFees:            number;
+  netAssetValue:        number;
+  assetBreakdown:       AssetBreakdown[];
+  subPortfolioSnapshots: SubPortfolioSnapshot[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Asset classification                                                */
+/* ------------------------------------------------------------------ */
+
+function determineAssetClass(asset: any): AssetClass {
+  if (asset.assetClass) return asset.assetClass as AssetClass;
+
+  const symbol      = (asset.symbol      ?? "").toLowerCase();
+  const description = (asset.description ?? "").toLowerCase();
+  const sector      = (asset.sector      ?? "").toLowerCase();
+
+  if (
+    description.includes("etf") ||
+    description.includes("exchange traded fund") ||
+    ["qqq", "spy", "voo", "iwm", "soxx", "xlk", "vti"].includes(symbol)
+  ) return "ETFS";
+
+  if (sector.includes("real estate") || sector.includes("reit") || description.includes("reit"))
+    return "REITS";
+
+  if (sector.includes("bond") || symbol.includes("bond") || description.includes("bond") || description.includes("treasury"))
+    return "BONDS";
+
+  if (symbol === "cash" || description === "cash" || symbol === "usd")
+    return "CASH";
+
+  return "EQUITIES";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Core: generate report from final merged (X2) positions only        */
+/* ------------------------------------------------------------------ */
+
+async function generatePortfolioReport(
+  userPortfolioId: string,
+  reportDate: Date = new Date()
+): Promise<GeneratedReport | null> {
   try {
-    const saved = await db.userPortfolioPerformanceReport.create({
-      data: {
-        userPortfolioId: report.userPortfolioId,
-        reportDate: report.reportDate,
-        totalCostPrice: report.totalCostPrice,
-        totalCloseValue: report.totalCloseValue,
-        totalLossGain: report.totalLossGain,
-        totalPercentage: report.totalPercentage,
-        assetBreakdown: {
-          create: report.assetBreakdown.map((breakdown:any) => ({
-            assetClass: breakdown.assetClass,
-            holdings: breakdown.holdings,
-            totalCashValue: breakdown.totalCashValue,
-            percentage: breakdown.percentage,
-          })),
+    const userPortfolio = await db.userPortfolio.findUnique({
+      where: { id: userPortfolioId },
+      include: {
+        // PortfolioWallet — source of truth for fees and NAV
+        wallet: true,
+        // Final merged positions (X2) — these are the live totals after all top-ups
+        userAssets: {
+          include: { asset: true },
+        },
+        // Sub-portfolio slices for snapshot history (X, X1, X2-source...)
+        subPortfolios: {
+          orderBy: { generation: "asc" },
         },
       },
     });
 
+    if (!userPortfolio) {
+      console.error(`UserPortfolio ${userPortfolioId} not found`);
+      return null;
+    }
+
+    const totalFees     = userPortfolio.wallet?.totalFees    ?? 0;
+    const walletBalance = userPortfolio.wallet?.balance      ?? 0;
+
+    // Empty portfolio — no assets yet
+    if (userPortfolio.userAssets.length === 0) {
+      return {
+        userPortfolioId,
+        reportDate,
+        totalCostPrice:       0,
+        totalCloseValue:      0,
+        totalLossGain:        0,
+        totalPercentage:      0,
+        totalFees,
+        netAssetValue:        walletBalance - totalFees,
+        assetBreakdown:       [],
+        subPortfolioSnapshots: [],
+      };
+    }
+
+    // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
+    // These already reflect the weighted-average across all top-up slices
+    let totalCostPrice  = 0;
+    let totalCloseValue = 0;
+    let totalLossGain   = 0;
+
+    const ALL_CLASSES: AssetClass[] = ["EQUITIES", "ETFS", "REITS", "BONDS", "CASH", "OTHERS"];
+    const classMap = new Map<AssetClass, { holdings: number; totalCashValue: number }>();
+    ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
+
+    for (const ua of userPortfolio.userAssets) {
+      totalCostPrice  += ua.costPrice  ?? 0;
+      totalCloseValue += ua.closeValue ?? 0;
+      totalLossGain   += ua.lossGain   ?? 0;
+
+      const cls   = determineAssetClass(ua.asset);
+      const entry = classMap.get(cls)!;
+      entry.holdings       += 1;
+      entry.totalCashValue += ua.closeValue ?? 0;
+    }
+
+    const assetBreakdown: AssetBreakdown[] = Array.from(classMap.entries()).map(
+      ([assetClass, data]) => ({
+        assetClass,
+        holdings:       data.holdings,
+        totalCashValue: data.totalCashValue,
+        percentage:     totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0,
+      })
+    );
+
+    const totalPercentage = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
+    // NAV = final merged close value minus all accumulated fees
+    const netAssetValue   = totalCloseValue - totalFees;
+
+    // ── Sub-portfolio snapshots: historical record of each slice ──────
+    // X (gen=0) = original investment, X1 (gen=1) = first top-up, etc.
+    const subPortfolioSnapshots: SubPortfolioSnapshot[] = userPortfolio.subPortfolios.map((sub) => ({
+      subPortfolioId:  sub.id,
+      generation:      sub.generation,
+      label:           sub.label,
+      amountInvested:  sub.amountInvested,
+      totalCostPrice:  sub.totalCostPrice,
+      totalCloseValue: sub.totalCloseValue,
+      totalLossGain:   sub.totalLossGain,
+      totalFees:       sub.totalFees,
+      cashAtBank:      sub.cashAtBank,
+    }));
+
+    return {
+      userPortfolioId,
+      reportDate,
+      totalCostPrice,
+      totalCloseValue,
+      totalLossGain,
+      totalPercentage,
+      totalFees,
+      netAssetValue,
+      assetBreakdown,
+      subPortfolioSnapshots,
+    };
+  } catch (error) {
+    console.error("Error generating portfolio report:", error);
+    return null;
+  }
+}
+
+async function savePortfolioReport(report: GeneratedReport): Promise<string | null> {
+  try {
+    const saved = await db.userPortfolioPerformanceReport.create({
+      data: {
+        userPortfolioId: report.userPortfolioId,
+        reportDate:      report.reportDate,
+        totalCostPrice:  report.totalCostPrice,
+        totalCloseValue: report.totalCloseValue,
+        totalLossGain:   report.totalLossGain,
+        totalPercentage: report.totalPercentage,
+        totalFees:       report.totalFees,
+        netAssetValue:   report.netAssetValue,
+        assetBreakdown: {
+          create: report.assetBreakdown.map((b) => ({
+            assetClass:     b.assetClass,
+            holdings:       b.holdings,
+            totalCashValue: b.totalCashValue,
+            percentage:     b.percentage,
+          })),
+        },
+        subPortfolioSnapshots: {
+          create: report.subPortfolioSnapshots.map((s) => ({
+            subPortfolioId:  s.subPortfolioId,
+            generation:      s.generation,
+            label:           s.label,
+            amountInvested:  s.amountInvested,
+            totalCostPrice:  s.totalCostPrice,
+            totalCloseValue: s.totalCloseValue,
+            totalLossGain:   s.totalLossGain,
+            totalFees:       s.totalFees,
+            cashAtBank:      s.cashAtBank,
+          })),
+        },
+      },
+    });
     return saved.id;
   } catch (error) {
     console.error("Error saving portfolio report:", error);
@@ -409,498 +763,402 @@ async function savePortfolioReport(
   }
 }
 
-/**
- * Generate and save report for a single portfolio
- */
 async function generateAndSaveReport(
   userPortfolioId: string,
   reportDate: Date = new Date()
 ): Promise<string | null> {
   const report = await generatePortfolioReport(userPortfolioId, reportDate);
   if (!report) return null;
-  return await savePortfolioReport(report);
+  return savePortfolioReport(report);
 }
 
-/**
- * Generate reports for all active user portfolios
- * This is called by the cron job every 24 hours
- */
+/* ------------------------------------------------------------------ */
+/*  Cron helper — called by the daily job                               */
+/* ------------------------------------------------------------------ */
 export async function generateDailyReportsForAllPortfolios(): Promise<{
-  success: number;
-  failed: number;
-  total: number;
-  errors: string[];
+  success: number; failed: number; total: number; errors: string[];
 }> {
-  try {
-    console.log("🚀 Starting daily report generation for all portfolios...");
+  console.log("🚀 Starting daily report generation...");
 
-    const allPortfolios = await db.userPortfolio.findMany({
-      select: { id: true, userId: true },
-    });
+  const allPortfolios = await db.userPortfolio.findMany({
+    where:  { isActive: true },
+    select: { id: true, userId: true },
+  });
 
-    let success = 0;
-    let failed = 0;
-    const errors: string[] = [];
+  let success = 0, failed = 0;
+  const errors: string[] = [];
 
-    const reportDate = new Date();
-    reportDate.setHours(0, 0, 0, 0); // Normalize to start of day
+  const reportDate = new Date();
+  reportDate.setHours(0, 0, 0, 0);
 
-    for (const portfolio of allPortfolios) {
-      try {
-        // Check if report already exists for today
-        const existingReport = await db.userPortfolioPerformanceReport.findFirst({
-          where: {
-            userPortfolioId: portfolio.id,
-            reportDate: {
-              gte: reportDate,
-              lt: new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
-            },
+  for (const portfolio of allPortfolios) {
+    try {
+      const existing = await db.userPortfolioPerformanceReport.findFirst({
+        where: {
+          userPortfolioId: portfolio.id,
+          reportDate: {
+            gte: reportDate,
+            lt:  new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
           },
-        });
+        },
+        select: { id: true },
+      });
 
-        if (existingReport) {
-          console.log(`⏭️  Report already exists for portfolio ${portfolio.id}`);
-          success++;
-          continue;
-        }
+      if (existing) { success++; continue; }
 
-        const reportId = await generateAndSaveReport(portfolio.id, reportDate);
-        if (reportId) {
-          success++;
-          console.log(`✅ Generated report for portfolio ${portfolio.id}`);
-        } else {
-          failed++;
-          errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
-          console.error(`❌ Failed to generate report for portfolio ${portfolio.id}`);
-        }
-      } catch (error: any) {
+      const reportId = await generateAndSaveReport(portfolio.id, reportDate);
+      if (reportId) { success++; }
+      else {
         failed++;
-        const errorMsg = `Portfolio ${portfolio.id}: ${error.message}`;
-        errors.push(errorMsg);
-        console.error(`❌ Error for portfolio ${portfolio.id}:`, error);
+        errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
       }
+    } catch (error: any) {
+      failed++;
+      errors.push(`Portfolio ${portfolio.id}: ${error.message}`);
     }
-
-    console.log(`\n📊 Daily Report Generation Summary:`);
-    console.log(`   Total portfolios: ${allPortfolios.length}`);
-    console.log(`   ✅ Success: ${success}`);
-    console.log(`   ❌ Failed: ${failed}`);
-
-    return {
-      success,
-      failed,
-      total: allPortfolios.length,
-      errors,
-    };
-  } catch (error) {
-    console.error("❌ Fatal error in generateDailyReportsForAllPortfolios:", error);
-    return { success: 0, failed: 0, total: 0, errors: [(error as Error).message] };
   }
+
+  console.log(`📊 Daily reports — total: ${allPortfolios.length}, ✅ ${success}, ❌ ${failed}`);
+  return { success, failed, total: allPortfolios.length, errors };
 }
 
-/* ----------------------------- API ENDPOINTS ----------------------------- */
+/* ------------------------------------------------------------------ */
+/*  Shared report include                                               */
+/* ------------------------------------------------------------------ */
+const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
+  assetBreakdown:        { orderBy: { assetClass: "asc" } },
+  subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+};
 
-/**
- * POST /api/portfolio-performance-reports/generate
- * Generate report manually for a specific portfolio
- */
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate                        */
+/*  Generate report for a single portfolio                              */
+/* ------------------------------------------------------------------ */
 export async function generatePerformanceReport(req: Request, res: Response) {
   try {
     const { userPortfolioId, reportDate } = req.body as {
-      userPortfolioId?: string;
-      reportDate?: string;
+      userPortfolioId?: string; reportDate?: string;
     };
 
     if (!userPortfolioId) {
-      return res.status(400).json({
-        data: null,
-        error: "userPortfolioId is required",
-      });
+      return res.status(400).json({ data: null, error: "userPortfolioId is required" });
     }
 
-    // Verify portfolio exists
     const portfolio = await db.userPortfolio.findUnique({
-      where: { id: userPortfolioId },
+      where:  { id: userPortfolioId },
+      select: { id: true, customName: true },
     });
-
-    if (!portfolio) {
-      return res.status(404).json({
-        data: null,
-        error: "Portfolio not found",
-      });
-    }
+    if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
 
     const date = reportDate ? new Date(reportDate) : new Date();
     date.setHours(0, 0, 0, 0);
 
     const reportId = await generateAndSaveReport(userPortfolioId, date);
-
     if (!reportId) {
-      return res.status(500).json({
-        data: null,
-        error: "Failed to generate report",
-      });
+      return res.status(500).json({ data: null, error: "Failed to generate report" });
     }
 
-    // Fetch the created report
     const report = await db.userPortfolioPerformanceReport.findUnique({
-      where: { id: reportId },
-      include: {
-        assetBreakdown: {
-          orderBy: { assetClass: "asc" },
-        },
-      },
+      where:   { id: reportId },
+      include: REPORT_INCLUDE,
     });
 
-    return res.status(201).json({
-      data: report,
-      error: null,
-    });
+    return res.status(201).json({ data: report, error: null });
   } catch (error) {
     console.error("generatePerformanceReport error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to generate report",
-    });
+    return res.status(500).json({ data: null, error: "Failed to generate report" });
   }
 }
 
-/**
- * POST /api/portfolio-performance-reports/generate-all
- * Generate reports for all portfolios (called by cron job)
- */
-export async function generateAllPerformanceReports(
-  req: Request,
-  res: Response
-) {
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate-for-user              */
+/*  Generate reports for ALL portfolios belonging to a single user     */
+/* ------------------------------------------------------------------ */
+export async function generateUserPerformanceReports(req: Request, res: Response) {
   try {
-    const result = await generateDailyReportsForAllPortfolios();
+    const { userId, reportDate } = req.body as {
+      userId?: string; reportDate?: string;
+    };
+
+    if (!userId) {
+      return res.status(400).json({ data: null, error: "userId is required" });
+    }
+
+    const user = await db.user.findUnique({
+      where:  { id: userId },
+      select: { id: true, firstName: true, lastName: true, email: true },
+    });
+    if (!user) return res.status(404).json({ data: null, error: "User not found" });
+
+    const activeCount = await db.userPortfolio.count({ where: { userId, isActive: true } });
+    if (!activeCount) {
+      return res.status(404).json({ data: null, error: "No active portfolios found for this user" });
+    }
+
+    const result = await generateDailyReportsForUser(userId);
 
     return res.status(200).json({
-      data: result,
-      message: `Generated ${result.success} reports successfully, ${result.failed} failed`,
-      error: null,
+      data:  { user: { id: user.id, email: user.email }, ...result },
+      error: result.failed > 0 ? `${result.failed} portfolio(s) failed` : null,
+    });
+  } catch (error) {
+    console.error("generateUserPerformanceReports error:", error);
+    return res.status(500).json({ data: null, error: "Failed to generate user reports" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate-all                    */
+/*  Generate reports for every active portfolio in the system (cron)   */
+/* ------------------------------------------------------------------ */
+export async function generateAllPerformanceReports(req: Request, res: Response) {
+  try {
+    const result = await generateDailyReportsForAllPortfolios();
+    return res.status(200).json({
+      data:    result,
+      message: `Generated ${result.success} reports, ${result.failed} failed`,
+      error:   null,
     });
   } catch (error) {
     console.error("generateAllPerformanceReports error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to generate reports for all portfolios",
-    });
+    return res.status(500).json({ data: null, error: "Failed to generate all reports" });
   }
 }
 
-/**
- * GET /api/portfolio-performance-reports/latest/:userPortfolioId
- * Get the latest report for a portfolio
- */
+/* ------------------------------------------------------------------ */
+/*  GET /portfolio-performance-reports/latest/:userPortfolioId          */
+/* ------------------------------------------------------------------ */
 export async function getLatestPerformanceReport(req: Request, res: Response) {
   try {
     const { userPortfolioId } = req.params;
 
-    if (!userPortfolioId) {
-      return res.status(400).json({
-        data: null,
-        error: "userPortfolioId is required",
-      });
-    }
-
     const report = await db.userPortfolioPerformanceReport.findFirst({
-      where: { userPortfolioId },
-      include: {
-        assetBreakdown: {
-          orderBy: { assetClass: "asc" },
-        },
-      },
-      orderBy: {
-        reportDate: "desc",
-      },
+      where:   { userPortfolioId },
+      orderBy: { reportDate: "desc" },
+      include: REPORT_INCLUDE,
     });
 
     if (!report) {
-      return res.status(404).json({
-        data: null,
-        error: "No reports found for this portfolio",
-      });
+      return res.status(404).json({ data: null, error: "No reports found for this portfolio" });
     }
 
-    return res.status(200).json({
-      data: report,
-      error: null,
-    });
+    return res.status(200).json({ data: report, error: null });
   } catch (error) {
     console.error("getLatestPerformanceReport error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to fetch latest report",
-    });
+    return res.status(500).json({ data: null, error: "Failed to fetch latest report" });
   }
 }
 
-/**
- * GET /api/portfolio-performance-reports?userPortfolioId=xxx&period=daily|weekly|monthly
- * Get reports for a specific period
- */
+/* ------------------------------------------------------------------ */
+/*  GET /portfolio-performance-reports                                  */
+/* ------------------------------------------------------------------ */
 export async function listPerformanceReports(req: Request, res: Response) {
   try {
     const { userPortfolioId, period, startDate, endDate } = req.query as {
-      userPortfolioId?: string;
-      period?: "daily" | "weekly" | "monthly";
-      startDate?: string;
-      endDate?: string;
+      userPortfolioId?: string; period?: "daily" | "weekly" | "monthly";
+      startDate?: string; endDate?: string;
     };
 
     if (!userPortfolioId) {
-      return res.status(400).json({
-        data: null,
-        error: "userPortfolioId is required",
-      });
+      return res.status(400).json({ data: null, error: "userPortfolioId is required" });
     }
 
-    const reportPeriod = period || "daily";
-    const now = new Date();
-    let start = startDate ? new Date(startDate) : new Date();
-    let end = endDate ? new Date(endDate) : now;
+    const reportPeriod = period ?? "daily";
+    const now   = new Date();
+    let   start = startDate ? new Date(startDate) : new Date(now);
+    const end   = endDate   ? new Date(endDate)   : now;
 
-    // Calculate date range based on period if not provided
     if (!startDate) {
       switch (reportPeriod) {
-        case "daily":
-          start = new Date(now);
-          start.setDate(now.getDate() - 1);
-          break;
-        case "weekly":
-          start = new Date(now);
-          start.setDate(now.getDate() - 7);
-          break;
-        case "monthly":
-          start = new Date(now);
-          start.setMonth(now.getMonth() - 1);
-          break;
+        case "daily":   start.setDate(now.getDate() - 1);   break;
+        case "weekly":  start.setDate(now.getDate() - 7);   break;
+        case "monthly": start.setMonth(now.getMonth() - 1); break;
       }
     }
 
     const reports = await db.userPortfolioPerformanceReport.findMany({
       where: {
         userPortfolioId,
-        reportDate: {
-          gte: start,
-          lte: end,
-        },
+        reportDate: { gte: start, lte: end },
       },
       include: {
-        assetBreakdown: {
-          orderBy: { assetClass: "asc" },
+        ...REPORT_INCLUDE,
+        userPortfolio: {
+          select: {
+            id: true, customName: true,
+            portfolio: { select: { id: true, name: true } },
+          },
         },
-        userPortfolio:{
-          include:{
-            userAssets:{
-              include:{
-                portfolioAsset:{
-                  include:{
-                    asset:true
-                  }
-                }
-              }
-            },
-            portfolio:true
-          }
-        }
       },
-      orderBy: {
-        reportDate: "desc",
-      },
+      orderBy: { reportDate: "desc" },
     });
 
     return res.status(200).json({
       data: reports,
-      meta: {
-        count: reports.length,
-        period: reportPeriod,
-        startDate: start,
-        endDate: end,
-      },
+      meta: { count: reports.length, period: reportPeriod, startDate: start, endDate: end },
       error: null,
     });
   } catch (error) {
     console.error("listPerformanceReports error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to fetch performance reports",
-    });
+    return res.status(500).json({ data: null, error: "Failed to fetch performance reports" });
   }
 }
 
-/**
- * GET /api/portfolio-performance-reports/:id
- * Get specific report by ID
- */
+/* ------------------------------------------------------------------ */
+/*  GET /portfolio-performance-reports/:id                              */
+/* ------------------------------------------------------------------ */
 export async function getPerformanceReportById(req: Request, res: Response) {
   try {
     const { id } = req.params;
 
     const report = await db.userPortfolioPerformanceReport.findUnique({
-      where: { id },
+      where:   { id },
       include: {
-        assetBreakdown: {
-          orderBy: { assetClass: "asc" },
-        },
+        ...REPORT_INCLUDE,
         userPortfolio: {
           include: {
             portfolio: true,
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-              },
-            },
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
           },
         },
       },
     });
 
-    if (!report) {
-      return res.status(404).json({
-        data: null,
-        error: "Report not found",
-      });
-    }
-
-    return res.status(200).json({
-      data: report,
-      error: null,
-    });
+    if (!report) return res.status(404).json({ data: null, error: "Report not found" });
+    return res.status(200).json({ data: report, error: null });
   } catch (error) {
     console.error("getPerformanceReportById error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to fetch report",
-    });
+    return res.status(500).json({ data: null, error: "Failed to fetch report" });
   }
 }
 
-/**
- * GET /api/portfolio-performance-reports/stats/:userPortfolioId?period=monthly
- * Get performance statistics
- */
+/* ------------------------------------------------------------------ */
+/*  GET /portfolio-performance-reports/stats/:userPortfolioId           */
+/* ------------------------------------------------------------------ */
 export async function getPerformanceStatistics(req: Request, res: Response) {
   try {
     const { userPortfolioId } = req.params;
     const { period } = req.query as { period?: "daily" | "weekly" | "monthly" };
 
-    const reportPeriod = period || "monthly";
-    const now = new Date();
-    let start = new Date();
+    const reportPeriod = period ?? "monthly";
+    const now   = new Date();
+    const start = new Date(now);
 
     switch (reportPeriod) {
-      case "daily":
-        start.setDate(now.getDate() - 1);
-        break;
-      case "weekly":
-        start.setDate(now.getDate() - 7);
-        break;
-      case "monthly":
-        start.setMonth(now.getMonth() - 1);
-        break;
+      case "daily":   start.setDate(now.getDate() - 1);   break;
+      case "weekly":  start.setDate(now.getDate() - 7);   break;
+      case "monthly": start.setMonth(now.getMonth() - 1); break;
     }
 
     const reports = await db.userPortfolioPerformanceReport.findMany({
-      where: {
-        userPortfolioId,
-        reportDate: { gte: start, lte: now },
-      },
+      where:   { userPortfolioId, reportDate: { gte: start, lte: now } },
       orderBy: { reportDate: "desc" },
     });
 
-    if (reports.length === 0) {
-      return res.status(404).json({
-        data: null,
-        error: "No reports found for this period",
-      });
+    if (!reports.length) {
+      return res.status(404).json({ data: null, error: "No reports found for this period" });
     }
 
     const latest = reports[0];
     const oldest = reports[reports.length - 1];
 
-    const totalGrowth = latest.totalCloseValue - oldest.totalCloseValue;
-    const growthPercentage =
-      oldest.totalCloseValue > 0
-        ? (totalGrowth / oldest.totalCloseValue) * 100
-        : 0;
-
-    const avgDailyGain =
-      reports.reduce((sum, r) => sum + r.totalLossGain, 0) / reports.length;
-
-    const bestDay = reports.reduce((best, r) =>
-      r.totalLossGain > best.totalLossGain ? r : best
-    );
-
-    const worstDay = reports.reduce((worst, r) =>
-      r.totalLossGain < worst.totalLossGain ? r : worst
-    );
+    const totalGrowth      = latest.totalCloseValue - oldest.totalCloseValue;
+    const growthPercentage = oldest.totalCloseValue > 0 ? (totalGrowth / oldest.totalCloseValue) * 100 : 0;
+    const avgDailyGain     = reports.reduce((s, r) => s + r.totalLossGain, 0) / reports.length;
+    const bestDay          = reports.reduce((b, r) => r.totalLossGain > b.totalLossGain ? r : b);
+    const worstDay         = reports.reduce((w, r) => r.totalLossGain < w.totalLossGain ? r : w);
 
     return res.status(200).json({
       data: {
-        period: reportPeriod,
-        reportCount: reports.length,
-        currentValue: latest.totalCloseValue,
-        startValue: oldest.totalCloseValue,
+        period:           reportPeriod,
+        reportCount:      reports.length,
+        currentValue:     latest.totalCloseValue,
+        currentNAV:       latest.netAssetValue,
+        currentFees:      latest.totalFees,
+        startValue:       oldest.totalCloseValue,
         totalGrowth,
         growthPercentage,
         avgDailyGain,
-        bestDay: {
-          date: bestDay.reportDate,
-          gain: bestDay.totalLossGain,
-          percentage: bestDay.totalPercentage,
-        },
-        worstDay: {
-          date: worstDay.reportDate,
-          loss: worstDay.totalLossGain,
-          percentage: worstDay.totalPercentage,
-        },
+        bestDay:  { date: bestDay.reportDate,  gain: bestDay.totalLossGain,  percentage: bestDay.totalPercentage  },
+        worstDay: { date: worstDay.reportDate, loss: worstDay.totalLossGain, percentage: worstDay.totalPercentage },
       },
       error: null,
     });
   } catch (error) {
     console.error("getPerformanceStatistics error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to calculate statistics",
-    });
+    return res.status(500).json({ data: null, error: "Failed to calculate statistics" });
   }
 }
 
-/**
- * DELETE /api/portfolio-performance-reports/cleanup
- * Cleanup old reports (keep last 90 days by default)
- */
+/* ------------------------------------------------------------------ */
+/*  DELETE /portfolio-performance-reports/cleanup                       */
+/* ------------------------------------------------------------------ */
 export async function cleanupPerformanceReports(req: Request, res: Response) {
   try {
     const { daysToKeep } = req.body as { daysToKeep?: number };
-    const days = daysToKeep || 90;
-
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const days   = daysToKeep ?? 90;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
 
     const deleted = await db.userPortfolioPerformanceReport.deleteMany({
-      where: {
-        reportDate: {
-          lt: cutoffDate,
-        },
-      },
+      where: { reportDate: { lt: cutoff } },
     });
 
     return res.status(200).json({
-      data: { deletedCount: deleted.count },
+      data:    { deletedCount: deleted.count },
       message: `Deleted ${deleted.count} old reports`,
-      error: null,
+      error:   null,
     });
   } catch (error) {
     console.error("cleanupPerformanceReports error:", error);
-    return res.status(500).json({
-      data: null,
-      error: "Failed to cleanup old reports",
-    });
+    return res.status(500).json({ data: null, error: "Failed to cleanup old reports" });
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Shared helper — used by both the HTTP endpoint and the cron job    */
+/* ------------------------------------------------------------------ */
+export async function generateDailyReportsForUser(userId: string): Promise<{
+  total: number; success: number; skipped: number; failed: number; errors: string[];
+}> {
+  const portfolios = await db.userPortfolio.findMany({
+    where:   { userId, isActive: true },
+    select:  { id: true, customName: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const reportDate = new Date();
+  reportDate.setHours(0, 0, 0, 0);
+
+  let success = 0, skipped = 0, failed = 0;
+  const errors: string[] = [];
+
+  for (const up of portfolios) {
+    try {
+      const existing = await db.userPortfolioPerformanceReport.findFirst({
+        where: {
+          userPortfolioId: up.id,
+          reportDate: {
+            gte: reportDate,
+            lt:  new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
+          },
+        },
+        select: { id: true },
+      });
+
+      if (existing) { skipped++; continue; }
+
+      const reportId = await generateAndSaveReport(up.id, reportDate);
+      if (reportId) { success++; }
+      else {
+        failed++;
+        errors.push(`[${up.customName}] Failed to generate`);
+      }
+    } catch (err: any) {
+      failed++;
+      errors.push(`[${up.customName}] ${err.message}`);
+    }
+  }
+
+  return { total: portfolios.length, success, skipped, failed, errors };
 }

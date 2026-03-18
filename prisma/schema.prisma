@@ -1,9 +1,525 @@
+// generator client {
+//   provider = "prisma-client-js"
+// }
 
+// datasource db {
+//   provider = "postgresql"
+//   url      = env("DATABASE_URL")
+// }
 
+// // =====================
+// // Enums
+// // =====================
 
-// =====================
-// Prisma Schema
-// =====================
+// enum UserRole {
+//   SUPER_ADMIN
+//   MANAGER
+//   ADMIN
+//   USER
+//   AGENT
+//   CLIENT_RELATIONS
+//   ACCOUNT_MANAGER
+//   STAFF              // generic staff role — use for non-agent internal users
+// }
+
+// enum UserStatus {
+//   ACTIVE
+//   INACTIVE
+//   PENDING
+//   SUSPENDED
+//   DEACTIVATED
+//   BANNED
+// }
+
+// enum AccountStatus {
+//   ACTIVE
+//   INACTIVE
+//   CLOSED
+//   FROZEN
+// }
+
+// enum TransactionStatus {
+//   PENDING
+//   APPROVED
+//   REJECTED
+// }
+
+// enum AssetClass {
+//   EQUITIES
+//   ETFS
+//   REITS
+//   BONDS
+//   CASH
+//   OTHERS
+// }
+
+// enum ReportPeriod {
+//   DAILY
+//   WEEKLY
+//   MONTHLY
+// }
+
+// // =====================
+// // Core Auth Models
+// // =====================
+
+// model Account {
+//   id                String  @id @default(cuid())
+//   userId            String
+//   type              String
+//   provider          String
+//   providerAccountId String
+//   refresh_token     String?
+//   access_token      String?
+//   expires_at        Int?
+//   token_type        String?
+//   scope             String?
+//   id_token          String?
+//   session_state     String?
+
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   @@unique([provider, providerAccountId])
+// }
+
+// model Session {
+//   id           String   @id @default(cuid())
+//   sessionToken String   @unique
+//   userId       String
+//   expires      DateTime
+
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+// }
+
+// model User {
+//   id             String      @id @default(cuid())
+//   name           String
+//   firstName      String
+//   lastName       String
+//   phone          String      @unique
+//   email          String      @unique
+//   emailVerified  Boolean     @default(false)
+//   password       String
+//   imageUrl       String      @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
+//   role           UserRole    @default(USER)
+//   status         UserStatus  @default(PENDING)
+//   isApproved     Boolean     @default(false)
+//   token          String?
+//   roleId         String?
+//   createdAt      DateTime    @default(now())
+//   updatedAt      DateTime    @updatedAt
+
+//   // Client relations
+//   accounts         Account[]
+//   sessions         Session[]
+//   resetTokens      PasswordResetToken[]
+//   refreshTokens    RefreshToken[]
+//   entityOnboarding EntityOnboarding?
+//   wallet           Wallet?
+//   deposits         Deposit[]
+//   withdrawals      Withdrawal[]
+//   portfolioSummary PortfolioSummary[]
+//   userPortfolios   UserPortfolio[]
+//   activityLogs     ActivityLog[]
+
+//   // Agent assignment — a client has at most one active agent assignment
+//   agentAssignment  AgentClientAssignment? @relation("ClientAssignment")
+
+//   // Staff profile — present only if this user is a staff member
+//   staffProfile     StaffProfile?
+// }
+
+// model RefreshToken {
+//   id        String   @id @default(uuid())
+//   token     String   @unique
+//   userId    String
+//   expiresAt DateTime
+//   revoked   Boolean  @default(false)
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+// }
+
+// model PasswordResetToken {
+//   id        String    @id @default(cuid())
+//   userId    String
+//   tokenHash String
+//   expiresAt DateTime
+//   usedAt    DateTime?
+//   createdAt DateTime  @default(now())
+
+//   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   @@index([userId])
+//   @@index([expiresAt])
+// }
+
+// // =====================
+// // Staff
+// // =====================
+
+// // A StaffProfile is created by an admin when they add a staff member.
+// // The linked User record is how the staff member logs in.
+// // Clients (USER role) do NOT have a StaffProfile.
+// model StaffProfile {
+//   id           String   @id @default(cuid())
+//   userId       String   @unique
+//   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   employeeId   String?  @unique   // optional internal employee ID
+//   department   String?            // e.g. "Sales", "Operations"
+//   position     String?            // e.g. "Senior Agent", "Relationship Manager"
+//   bio          String?
+//   isActive     Boolean  @default(true)
+
+//   // Who (admin) created this staff account
+//   createdById  String?            // User.id of the admin
+//   createdAt    DateTime @default(now())
+//   updatedAt    DateTime @updatedAt
+
+//   // Clients assigned to this staff member (relevant for AGENT role)
+//   assignedClients      AgentClientAssignment[]
+
+//   // Clients whose onboarding form selected this staff member as their agent
+//   onboardingClients    EntityOnboarding[]
+// }
+
+// // Tracks which agent is assigned to which client.
+// // Created when a client selects an agent during onboarding.
+// // Admin can also reassign: set isActive=false on old, create new record.
+// model AgentClientAssignment {
+//   id            String    @id @default(cuid())
+
+//   // The agent (StaffProfile of a User with AGENT/ACCOUNT_MANAGER/CLIENT_RELATIONS role)
+//   agentId       String
+//   agent         StaffProfile @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+//   // The client (User with USER role)
+//   clientId      String    @unique   // one active agent per client at a time
+//   client        User      @relation("ClientAssignment", fields: [clientId], references: [id], onDelete: Cascade)
+
+//   // Who made/approved the assignment (admin or the system during onboarding)
+//   assignedById  String?             // User.id of admin, null if self-selected during onboarding
+//   assignedAt    DateTime  @default(now())
+
+//   // History: when a client is reassigned, old record is deactivated
+//   isActive      Boolean   @default(true)
+//   unassignedAt  DateTime?
+
+//   @@index([agentId])
+//   @@index([clientId])
+// }
+
+// // =====================
+// // KYC / Onboarding
+// // =====================
+
+// model EntityOnboarding {
+//   id                      String   @id @default(cuid())
+//   userId                  String   @unique
+//   user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+//   // Agent selected by the client during onboarding
+//   agentId                 String?
+//   agent                   StaffProfile? @relation(fields: [agentId], references: [id], onUpdate: Cascade)
+
+//   entityType              String
+//   fullName                String?
+//   dateOfBirth             DateTime?
+//   tin                     String?   @unique
+//   avatarUrl               String?
+
+//   homeAddress             String?
+//   email                   String?
+//   phoneNumber             String?
+//   employmentStatus        String?
+//   occupation              String?
+
+//   companyName             String?
+//   idUrl                   String?
+//   hasBusiness             String?
+//   registrationNumber      String?
+//   companyAddress          String?
+//   businessType            String?
+//   incorporationDate       DateTime?
+
+//   authorizedRepName       String?
+//   authorizedRepEmail      String?
+//   authorizedRepPhone      String?
+//   authorizedRepPosition   String?
+//   isApproved              Boolean   @default(false)
+
+//   primaryGoal             String?
+//   timeHorizon             String?
+//   riskTolerance           String?
+//   investmentExperience    String?
+//   isPEP                   String?
+//   consentToDataCollection Boolean?
+//   agreeToTerms            Boolean?
+
+//   sourceOfWealth          String?
+//   businessOwnership       String?
+//   employmentIncome        String?
+//   expectedInvestment      String?
+
+//   nationalIdUrl           String?
+//   bankStatementUrl        String?
+//   passportPhotoUrl        String?
+//   tinCertificateUrl       String?
+
+//   businessName            String?
+//   businessAddress         String?
+//   establishmentDate       DateTime?
+//   ownershipPercentage     String?
+//   familyMemberDetails     String?
+//   publicPosition          String?
+//   relationshipToCountry   String?
+//   sanctionsOrLegal        String?
+
+//   createdAt               DateTime  @default(now())
+//   updatedAt               DateTime  @updatedAt
+// }
+
+// // =====================
+// // Wallet & Cash Flows
+// // =====================
+
+// model Wallet {
+//   id             String         @id @default(cuid())
+//   accountNumber  String         @unique
+//   userId         String         @unique
+//   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   balance        Float          @default(0.0)
+//   bankFee        Float          @default(30)
+//   transactionFee Float          @default(10)
+//   feeAtBank      Float          @default(10)
+//   totalFees      Float          @default(50.0)
+//   netAssetValue  Float          @default(0.0)
+//   status         AccountStatus  @default(ACTIVE)
+//   deposits       Deposit[]
+//   withdrawals    Withdrawal[]
+//   createdAt      DateTime       @default(now())
+//   updatedAt      DateTime       @updatedAt
+// }
+
+// model Deposit {
+//   id                String            @id @default(cuid())
+//   walletId          String
+//   wallet            Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   amount            Float
+//   userId            String
+//   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   transactionId     String?           @unique
+//   transactionStatus TransactionStatus @default(PENDING)
+//   mobileNo          String?
+//   referenceNo       String?
+//   AccountNo         String?
+//   ApprovedBy        String?
+//   method            String?
+//   description       String?
+//   createdAt         DateTime          @default(now())
+// }
+
+// model Withdrawal {
+//   id                String            @id @default(cuid())
+//   walletId          String
+//   wallet            Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   amount            Float
+//   userId            String
+//   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   transactionStatus TransactionStatus @default(PENDING)
+//   AccountNo         String?
+//   AccountName       String?
+//   referenceNo       String
+//   transactionId     String?           @unique
+//   method            String?
+//   approvedById      String?
+//   approvedByName    String?
+//   approvedAt        DateTime?
+//   rejectedById      String?
+//   rejectedByName    String?
+//   rejectedAt        DateTime?
+//   rejectReason      String?
+//   bankName          String
+//   bankAccountName   String
+//   bankBranch        String
+//   description       String?
+//   createdAt         DateTime          @default(now())
+//   updatedAt         DateTime          @updatedAt
+// }
+
+// // =====================
+// // Assets & Portfolios
+// // =====================
+
+// model Asset {
+//   id                          String     @id @default(cuid())
+//   symbol                      String     @unique
+//   description                 String
+//   sector                      String
+//   assetClass                  AssetClass @default(OTHERS)
+//   defaultAllocationPercentage Float      @default(0.0)
+//   defaultCostPerShare         Float      @default(0.0)
+//   closePrice                  Float      @default(0.0)
+
+//   portfolios          PortfolioAsset[]
+//   userPortfolioAssets UserPortfolioAsset[]
+//   createdAt           DateTime @default(now())
+//   updatedAt           DateTime @updatedAt
+// }
+
+// model Portfolio {
+//   id                   String           @id @default(cuid())
+//   name                 String           @unique
+//   description          String?
+//   timeHorizon          String
+//   riskTolerance        String
+//   allocationPercentage Float            @default(100)
+//   assets               PortfolioAsset[]
+//   userPortfolios       UserPortfolio[]
+//   createdAt            DateTime         @default(now())
+//   updatedAt            DateTime         @updatedAt
+// }
+
+// model UserPortfolio {
+//   id             String   @id @default(cuid())
+//   userId         String
+//   portfolioId    String
+//   portfolioValue Float    @default(0.0)
+
+//   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+//   portfolio      Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+//   userAssets         UserPortfolioAsset[]
+//   performanceReports UserPortfolioPerformanceReport[]
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   @@unique([userId, portfolioId])
+// }
+
+// model UserPortfolioAsset {
+//   id                   String  @id @default(cuid())
+//   userPortfolioId      String
+//   assetId              String
+//   allocationPercentage Float   @default(0.0)
+//   costPerShare         Float   @default(0.0)
+//   costPrice            Float   @default(0.0)
+//   stock                Float   @default(0.0)
+//   closeValue           Float   @default(0.0)
+//   lossGain             Float   @default(0.0)
+
+//   userPortfolio UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+//   asset         Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   @@unique([userPortfolioId, assetId])
+// }
+
+// model PortfolioAsset {
+//   id                          String    @id @default(cuid())
+//   portfolioId                 String
+//   assetId                     String
+//   defaultAllocationPercentage Float     @default(0.0)
+//   defaultCostPerShare         Float     @default(0.0)
+//   lossGain                    Float     @default(0.0)
+//   closeValue                  Float     @default(0.0)
+//   costPrice                   Float     @default(0.0)
+//   stock                       Float     @default(0.0)
+
+//   portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+//   asset     Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+
+//   @@unique([portfolioId, assetId])
+// }
+
+// model PortfolioSummary {
+//   id              String   @id @default(cuid())
+//   cashAtBank      Float
+//   userId          String
+//   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   cashOutstanding Float
+//   cashAvailable   Float
+//   createdAt       DateTime @default(now())
+//   updatedAt       DateTime @updatedAt
+// }
+
+// // =====================
+// // Activity Logging
+// // =====================
+
+// model ActivityLog {
+//   id              String   @id @default(cuid())
+//   userId          String
+//   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+//   action          String
+//   module          String?
+//   status          String?
+//   description     String?
+//   method          String?
+//   platform        String?
+//   performedByRole String?
+//   entityId        String?
+//   entityType      String?
+//   referrerUrl     String?
+//   ipAddress       String?
+//   userAgent       String?
+//   location        String?
+//   isAutomated     Boolean? @default(false)
+//   durationMs      Int?
+//   errorMessage    String?
+//   metadata        Json?
+//   createdAt       DateTime @default(now())
+
+//   @@index([userId, action, createdAt])
+// }
+
+// // =====================
+// // Performance Reports
+// // =====================
+
+// model UserPortfolioPerformanceReport {
+//   id              String       @id @default(cuid())
+//   userPortfolioId String
+//   reportDate      DateTime     @default(now())
+//   period          ReportPeriod @default(DAILY)
+//   totalCostPrice  Float        @default(0)
+//   totalCloseValue Float        @default(0)
+//   totalLossGain   Float        @default(0)
+//   totalPercentage Float        @default(0)
+
+//   userPortfolio  UserPortfolio            @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+//   assetBreakdown PortfolioAssetBreakdown[]
+
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @default(now()) @updatedAt
+
+//   @@index([userPortfolioId, reportDate])
+//   @@index([reportDate])
+//   @@index([userPortfolioId, period, reportDate])
+// }
+
+// model PortfolioAssetBreakdown {
+//   id             String     @id @default(cuid())
+//   reportId       String
+//   assetClass     AssetClass
+//   holdings       Int        @default(0)
+//   totalCashValue Float      @default(0)
+//   percentage     Float      @default(0)
+
+//   report    UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+//   createdAt DateTime @default(now())
+
+//   @@unique([reportId, assetClass])
+//   @@index([reportId])
+// }
 
 generator client {
   provider = "prisma-client-js"
@@ -23,13 +539,17 @@ enum UserRole {
   MANAGER
   ADMIN
   USER
+  AGENT
+  CLIENT_RELATIONS
+  ACCOUNT_MANAGER
+  STAFF
 }
 
 enum UserStatus {
-  ACTIVE          // normal active account
-  INACTIVE        // cannot login
-  PENDING         // awaiting email verification
-  SUSPENDED       // temporarily blocked
+  ACTIVE
+  INACTIVE
+  PENDING
+  SUSPENDED
   DEACTIVATED
   BANNED
 }
@@ -56,11 +576,25 @@ enum AssetClass {
   OTHERS
 }
 
-// Enum for report periods
 enum ReportPeriod {
   DAILY
   WEEKLY
   MONTHLY
+}
+
+enum TopupStatus {
+  PENDING // top-up deposit received, sub-portfolio created (X1)
+  MERGED // recalculation done, X2 generated, X1 absorbed
+}
+
+enum WalletType {
+  MASTER // the one general wallet that aggregates all portfolios
+  PORTFOLIO // one wallet per UserPortfolio
+}
+
+enum DepositTarget {
+  MASTER // free deposit into master wallet (not yet assigned to any portfolio)
+  PORTFOLIO // deposit directly into a specific portfolio wallet
 }
 
 // =====================
@@ -96,35 +630,57 @@ model Session {
 }
 
 model User {
-  id             String      @id @default(cuid())
-  name           String
-  firstName      String
-  lastName       String
-  phone          String      @unique
-  email          String      @unique
-  emailVerified  Boolean     @default(false)
-  password       String
-  imageUrl       String      @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
-  role           UserRole    @default(USER)
-  status         UserStatus  @default(PENDING)
-  isApproved     Boolean     @default(false)
-  token          String?
-  roleId         String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  id            String     @id @default(cuid())
+  name          String
+  firstName     String
+  lastName      String?
+  phone         String     @unique
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  password      String
+  imageUrl      String     @default("https://ylhpxhcgr4.ufs.sh/f/ZVlDsNdibGfFLkXm6f8jxEOgRvuoCGdTw7N05shB2kHlF1LU?expires=1760298626027&signature=hmac-sha256%3De5e64a05048cc6fd92c9ca7aabf68cf8a9992143d9f2bce18cfd5e7e30d6e5d4")
+  role          UserRole   @default(USER)
+  status        UserStatus @default(PENDING)
+  isApproved    Boolean    @default(false)
+  token         String?
+  roleId        String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  // Relations
   accounts         Account[]
   sessions         Session[]
   resetTokens      PasswordResetToken[]
   refreshTokens    RefreshToken[]
-  entityOnboarding EntityOnboarding?
-  wallet           Wallet?
-  deposits         Deposit[]
-  withdrawals      Withdrawal[]
+  individualOnboarding IndividualOnboarding?
+  companyOnboarding    CompanyOnboarding?
+
+  // One master wallet per user (aggregates across all portfolio wallets)
+  masterWallet MasterWallet?
+
+  // Deposits/withdrawals where this user is the CLIENT (the account being funded/debited)
+  deposits    Deposit[]    @relation("ClientDeposits")
+  withdrawals Withdrawal[] @relation("ClientWithdrawals")
+
+  // Deposits/withdrawals this staff member CREATED on behalf of a client
+  createdDeposits    Deposit[]    @relation("DepositCreatedBy")
+  createdWithdrawals Withdrawal[] @relation("WithdrawalCreatedBy")
+
+  // Deposits/withdrawals this staff member APPROVED
+  approvedDeposits    Deposit[]    @relation("DepositApprovedBy")
+  approvedWithdrawals Withdrawal[] @relation("WithdrawalApprovedBy")
+
+  // Deposits/withdrawals this staff member REJECTED
+  rejectedDeposits    Deposit[]    @relation("DepositRejectedBy")
+  rejectedWithdrawals Withdrawal[] @relation("WithdrawalRejectedBy")
+
   portfolioSummary PortfolioSummary[]
-  userPortfolios   UserPortfolio[]
-  activityLogs     ActivityLog[]
+
+  // A user can hold many named portfolio enrollments
+  userPortfolios UserPortfolio[]
+
+  activityLogs    ActivityLog[]
+  agentAssignment AgentClientAssignment? @relation("ClientAssignment")
+  staffProfile    StaffProfile?
 }
 
 model RefreshToken {
@@ -140,12 +696,12 @@ model RefreshToken {
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   // store only the hash of the raw token
+  tokenHash String
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -154,291 +710,521 @@ model PasswordResetToken {
 }
 
 // =====================
-// Onboarding / KYC
+// Staff
+// =====================
+
+model StaffProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  employeeId  String?  @unique
+  department  String?
+  position    String?
+  bio         String?
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignedClients   AgentClientAssignment[]
+  companyOnboardingClients    CompanyOnboarding[]    @relation("CompanyOnboardingAgent")
+  individualOnboardingClients IndividualOnboarding[] @relation("IndividualOnboardingAgent")
+
+}
+
+model AgentClientAssignment {
+  id           String       @id @default(cuid())
+  agentId      String
+  agent        StaffProfile @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  clientId     String       @unique
+  client       User         @relation("ClientAssignment", fields: [clientId], references: [id], onDelete: Cascade)
+  assignedById String?
+  assignedAt   DateTime     @default(now())
+  isActive     Boolean      @default(true)
+  unassignedAt DateTime?
+
+  @@index([agentId])
+  @@index([clientId])
+}
+
+// =====================
+// KYC / Onboarding
 // =====================
 
 // model EntityOnboarding {
-//   id                      String   @id @default(cuid())
-//   entityType              String   // ideally enum: "individual" | "company"
-//   fullName                String
-//   userId                  String   @unique
-//   user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-//   dateOfBirth             DateTime
-//   tin                     String   @unique
+//   id                      String        @id @default(cuid())
+//   userId                  String        @unique
+//   user                    User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+//   agentId                 String?
+//   agent                   StaffProfile? @relation(fields: [agentId], references: [id], onUpdate: Cascade)
+//   entityType              String
+//   fullName                String?
+//   dateOfBirth             DateTime?
+//   tin                     String?       @unique
 //   avatarUrl               String?
-//   idUrl                   String?
-//   homeAddress             String
-//   email                   String
-//   phoneNumber             String
-//   employmentStatus        String
-//   occupation              String
+//   homeAddress             String?
+//   email                   String?
+//   phoneNumber             String?
+//   employmentStatus        String?
+//   occupation              String?
 //   companyName             String?
+//   idUrl                   String?
 //   hasBusiness             String?
 //   registrationNumber      String?
 //   companyAddress          String?
 //   businessType            String?
 //   incorporationDate       DateTime?
 //   authorizedRepName       String?
-//   isApproved              Boolean  @default(false)
 //   authorizedRepEmail      String?
 //   authorizedRepPhone      String?
 //   authorizedRepPosition   String?
-//   primaryGoal             String
-//   timeHorizon             String
-//   riskTolerance           String
-//   investmentExperience    String
-//   isPEP                   String   // ideally boolean or enum
-//   consentToDataCollection Boolean
-//   agreeToTerms            Boolean
-//   sourceOfWealth          String
-//   businessOwnership       String
-//   employmentIncome        String
-//   expectedInvestment      String
-//   businessName            String
-//   businessAddress         String
-//   establishmentDate       DateTime
-//   ownershipPercentage     String
-//   familyMemberDetails     String
-//   publicPosition          String
-//   relationshipToCountry   String
-//   sanctionsOrLegal        String   // ideally boolean or enum
-//   createdAt               DateTime @default(now())
-//   updatedAt               DateTime @updatedAt
+//   isApproved              Boolean       @default(false)
+//   primaryGoal             String?
+//   timeHorizon             String?
+//   riskTolerance           String?
+//   investmentExperience    String?
+//   isPEP                   String?
+//   consentToDataCollection Boolean?
+//   agreeToTerms            Boolean?
+//   sourceOfWealth          String?
+//   businessOwnership       String?
+//   employmentIncome        String?
+//   expectedInvestment      String?
+//   nationalIdUrl           String?
+//   bankStatementUrl        String?
+//   passportPhotoUrl        String?
+//   tinCertificateUrl       String?
+//   businessName            String?
+//   businessAddress         String?
+//   establishmentDate       DateTime?
+//   ownershipPercentage     String?
+//   familyMemberDetails     String?
+//   publicPosition          String?
+//   relationshipToCountry   String?
+//   sanctionsOrLegal        String?
+//   createdAt               DateTime      @default(now())
+//   updatedAt               DateTime      @updatedAt
 // }
 
-
-model EntityOnboarding {
-  id                      String   @id @default(cuid())
-  userId                  String   @unique
-  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-
-  // Core fields
-  entityType              String                 // "individual" | "company"
-  fullName                String?
-  dateOfBirth             DateTime?
-  tin                     String?   @unique
-  avatarUrl               String?
-
-  // Contact & personal
-  homeAddress             String?
-  email                   String?
-  phoneNumber             String?
-  employmentStatus        String?
-  occupation              String?
-
-  // Company fields
-  companyName             String?
-  idUrl                    String?
-  hasBusiness             String?
-  registrationNumber      String?
-  companyAddress          String?
-  businessType            String?
-  incorporationDate       DateTime?
-
-  authorizedRepName       String?
-  authorizedRepEmail      String?
-  authorizedRepPhone      String?
-  authorizedRepPosition   String?
-  isApproved              Boolean   @default(false)
-
-  // Investment profile
-  primaryGoal             String?
-  timeHorizon             String?
-  riskTolerance           String?
-  investmentExperience    String?
-  isPEP                   String?   // you may convert later to boolean
-  consentToDataCollection Boolean?
-  agreeToTerms            Boolean?
-
-  sourceOfWealth          String?
-  businessOwnership       String?
-  employmentIncome        String?
-  expectedInvestment      String?
-
-  // Required documents
-  nationalIdUrl           String?
-  bankStatementUrl        String?
-
-  // Optional uploaded documents
-  passportPhotoUrl        String?
-  tinCertificateUrl       String?
-
-  // Legacy / Optional Fields
-  businessName            String?
-  businessAddress         String?
-  establishmentDate       DateTime?
-  ownershipPercentage     String?
-  familyMemberDetails     String?
-  publicPosition          String?
-  relationshipToCountry   String?
-  sanctionsOrLegal        String?
-
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-}
-
-
 // =====================
-// Wallet & Cash Flows
+// Wallets
 // =====================
 
-model Wallet {
-  id             String         @id @default(cuid())
-  accountNumber  String         @unique
-  userId         String         @unique
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  balance        Float          @default(0.0)
-  bankFee        Float          @default(30)
-  transactionFee Float          @default(10)
-  feeAtBank      Float          @default(10)
-  totalFees      Float          @default(50.0)
-  netAssetValue  Float          @default(0.0)
-  status         AccountStatus  @default(ACTIVE)
-  deposits       Deposit[]
-  withdrawals    Withdrawal[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+// One master wallet per user — aggregates balance across all portfolio wallets
+model MasterWallet {
+  id            String @id @default(cuid())
+  accountNumber String @unique
+  userId        String @unique
+  user          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Rolling totals across all portfolio wallets
+  totalDeposited Float @default(0.0) // sum of all approved deposits
+  totalWithdrawn Float @default(0.0) // sum of all approved withdrawals
+  totalFees      Float @default(0.0) // sum of all fees across portfolios
+  netAssetValue  Float @default(0.0) // sum of NAV across all portfolio wallets
+
+  status    AccountStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  deposits    Deposit[]
+  withdrawals Withdrawal[]
 }
+
+// One PortfolioWallet per UserPortfolio
+model PortfolioWallet {
+  id              String        @id @default(cuid())
+  accountNumber   String        @unique
+  userPortfolioId String        @unique
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+
+  balance        Float @default(0.0) // cash balance in this portfolio wallet
+  bankFee        Float @default(30)
+  transactionFee Float @default(10)
+  feeAtBank      Float @default(10)
+  totalFees      Float @default(50.0)
+  netAssetValue  Float @default(0.0) // total close value of assets + cash balance - fees
+
+  status    AccountStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  deposits    Deposit[]
+  withdrawals Withdrawal[]
+}
+
+// =====================
+// Deposits & Withdrawals
+// =====================
 
 model Deposit {
-  id               String            @id @default(cuid())
-  walletId         String
-  wallet           Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  amount           Float
-  userId           String
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  transactionId    String?           @unique
+  id String @id @default(cuid())
+
+  // The CLIENT whose portfolio is being funded
+  userId String
+  user   User   @relation("ClientDeposits", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Staff who CREATED this deposit request (admin/agent — NOT the client)
+  createdById   String?
+  createdBy     User?     @relation("DepositCreatedBy", fields: [createdById], references: [id])
+  createdByName String?
+  createdByRole UserRole?
+
+  // Staff who APPROVED this deposit
+  approvedById   String?
+  approvedBy     User?     @relation("DepositApprovedBy", fields: [approvedById], references: [id])
+  approvedByName String?
+  approvedAt     DateTime?
+
+  // Staff who REJECTED this deposit
+  rejectedById   String?
+  rejectedBy     User?     @relation("DepositRejectedBy", fields: [rejectedById], references: [id])
+  rejectedByName String?
+  rejectedAt     DateTime?
+  rejectReason   String?
+
+  // One of these is set depending on depositTarget
+  masterWalletId    String?
+  masterWallet      MasterWallet?    @relation(fields: [masterWalletId], references: [id])
+  portfolioWalletId String?
+  portfolioWallet   PortfolioWallet? @relation(fields: [portfolioWalletId], references: [id])
+
+  // Which portfolio this deposit is going into (null if depositing to master only)
+  userPortfolioId String?
+  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
+
+  depositTarget     DepositTarget     @default(PORTFOLIO)
+  amount            Float
+  transactionId     String?           @unique
   transactionStatus TransactionStatus @default(PENDING)
-  mobileNo         String?
-  referenceNo      String?
-  AccountNo        String?
-  ApprovedBy       String?
-  method           String?
-  description      String?
-  createdAt        DateTime          @default(now())
+  mobileNo          String?
+  referenceNo       String?
+  accountNo         String?
+  method            String?
+  description       String?
+
+  // If this deposit triggered a top-up, link to the TopupEvent
+  topupEvent TopupEvent?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdById])
+  @@index([userPortfolioId])
 }
 
 model Withdrawal {
-  id                String            @id @default(cuid())
-  walletId          String
-  wallet            Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id String @id @default(cuid())
+
+  // The CLIENT whose portfolio is being debited
+  userId String
+  user   User   @relation("ClientWithdrawals", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Staff who CREATED this withdrawal request (admin/agent — NOT the client)
+  createdById   String?
+  createdBy     User?     @relation("WithdrawalCreatedBy", fields: [createdById], references: [id])
+  createdByName String?
+  createdByRole UserRole?
+
+  // Staff who APPROVED this withdrawal
+  approvedById   String?
+  approvedBy     User?     @relation("WithdrawalApprovedBy", fields: [approvedById], references: [id])
+  approvedByName String?
+  approvedAt     DateTime?
+
+  // Staff who REJECTED this withdrawal
+  rejectedById   String?
+  rejectedBy     User?     @relation("WithdrawalRejectedBy", fields: [rejectedById], references: [id])
+  rejectedByName String?
+  rejectedAt     DateTime?
+  rejectReason   String?
+
+  masterWalletId    String?
+  masterWallet      MasterWallet?    @relation(fields: [masterWalletId], references: [id])
+  portfolioWalletId String?
+  portfolioWallet   PortfolioWallet? @relation(fields: [portfolioWalletId], references: [id])
+
+  // Withdrawal is always from a specific portfolio
+  userPortfolioId String?
+  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
+
   amount            Float
-  userId            String
-  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   transactionStatus TransactionStatus @default(PENDING)
-  AccountNo         String?
-  AccountName       String?
+  accountNo         String?
+  accountName       String?
   referenceNo       String
   transactionId     String?           @unique
   method            String?
-  approvedById      String?           // e.g., admin user id
-  approvedByName    String?           // e.g., "Jane Admin"
-  approvedAt        DateTime?
-  rejectedById      String?
-  rejectedByName    String?
-  rejectedAt        DateTime?
-  rejectReason      String?
   bankName          String
   bankAccountName   String
   bankBranch        String
   description       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([createdById])
+  @@index([userPortfolioId])
 }
 
 // =====================
-// Assets & Portfolios
+// Assets & Portfolios (Template layer)
 // =====================
 
 model Asset {
-  id                   String     @id @default(cuid())
-  symbol               String     @unique
-  description          String
-  sector               String
+  id                          String     @id @default(cuid())
+  symbol                      String     @unique
+  description                 String
+  sector                      String
+  assetClass                  AssetClass @default(OTHERS)
+  defaultAllocationPercentage Float      @default(0.0)
+  defaultCostPerShare         Float      @default(0.0)
+  closePrice                  Float      @default(0.0)
+  portfolioAssets     PortfolioAsset[]
+  userPortfolioAssets UserPortfolioAsset[]
+  subPortfolioAssets  SubPortfolioAsset[]
 
-  // classification used in breakdown reports
-  assetClass           AssetClass @default(OTHERS)
-
-  allocationPercentage Float      @default(0.0)
-  costPerShare         Float      @default(0.0)
-  closePrice           Float      @default(0.0)
-  portfolios           PortfolioAsset[]
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Portfolio {
-  id                  String           @id @default(cuid())
-  name                String           @unique
-  description         String?
-  timeHorizon         String
-  riskTolerance       String
-  allocationPercentage Float           @default(100)
-  assets              PortfolioAsset[]
-  userPortfolios      UserPortfolio[]
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-}
-
-model UserPortfolio {
-  id                 String                        @id @default(cuid())
-  userId             String
-  portfolioId        String
-  portfolioValue     Float                         @default(0.0)
-  user               User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  portfolio          Portfolio                     @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  userAssets         UserPortfolioAsset[]
-  createdAt          DateTime                      @default(now())
-  updatedAt          DateTime                      @updatedAt
-
-  // Performance reports for this user-portfolio
-  performanceReports UserPortfolioPerformanceReport[]
-
-  @@unique([userId, portfolioId])
-}
-
-model UserPortfolioAsset {
-  id               String          @id @default(cuid())
-  userPortfolioId  String
-  portfolioAssetId String
-  costPrice        Float           @default(0.0) // = asset.allocPercent × user.wallet.netAssetValue
-  stock            Float           @default(0.0) // = costPrice ÷ asset.costPerShare
-  closeValue       Float           @default(0.0) // = asset.closePrice × stock
-  lossGain         Float           @default(0.0) // = closeValue - costPrice
-
-  userPortfolio  UserPortfolio  @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
-  portfolioAsset PortfolioAsset @relation(fields: [portfolioAssetId], references: [id], onDelete: Cascade)
-
-  @@unique([userPortfolioId, portfolioAssetId])
+  id                   String           @id @default(cuid())
+  name                 String           @unique
+  description          String?
+  timeHorizon          String
+  riskTolerance        String
+  allocationPercentage Float            @default(100)
+  assets               PortfolioAsset[]
+  userPortfolios       UserPortfolio[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 }
 
 model PortfolioAsset {
-  id           String             @id @default(cuid())
-  portfolioId  String
-  assetId      String
-  lossGain     Float              @default(0.0)
-  closeValue   Float              @default(0.0)
-  costPrice    Float              @default(0.0)
-  stock        Float              @default(0.0)
+  id                          String @id @default(cuid())
+  portfolioId                 String
+  assetId                     String
+  defaultAllocationPercentage Float  @default(0.0)
+  defaultCostPerShare         Float  @default(0.0)
+  lossGain                    Float  @default(0.0)
+  closeValue                  Float  @default(0.0)
+  costPrice                   Float  @default(0.0)
+  stock                       Float  @default(0.0)
 
-  portfolio    Portfolio          @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  asset        Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  userAssets   UserPortfolioAsset[]
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  asset     Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([portfolioId, assetId])
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
 }
 
+// =====================
+// User Portfolio (Named Enrollment)
+// =====================
+
+// A user can enroll into the same Portfolio template multiple times,
+// each time giving it a custom name (e.g. "Retirement Fund", "School Fees").
+// Each UserPortfolio is independent: its own wallet, sub-portfolios, and performance history.
+model UserPortfolio {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  portfolioId String
+  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  // Custom name given by the user (e.g. "Retirement Fund")
+  customName String
+
+  // Merged/live asset positions (the "active" X2 state after all top-ups merged)
+  portfolioValue Float @default(0.0) // total close value of all merged assets
+  totalInvested  Float @default(0.0) // total cost price across all sub-portfolios
+  totalLossGain  Float @default(0.0) // totalCloseValue - totalInvested
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One dedicated wallet
+  wallet PortfolioWallet?
+
+  // The live merged asset holdings (X2 state)
+  userAssets UserPortfolioAsset[]
+
+  // All sub-portfolios: initial (X) + top-ups (X1, X2-source, …)
+  subPortfolios SubPortfolio[]
+
+  // Top-up events tracking each recalculation cycle
+  topupEvents TopupEvent[]
+
+  // Deposits/withdrawals referencing this portfolio
+  deposits    Deposit[]
+  withdrawals Withdrawal[]
+
+  // Performance reports
+  performanceReports UserPortfolioPerformanceReport[]
+
+  @@unique([userId, portfolioId, customName])
+  @@index([userId])
+}
+
+// The live merged asset positions for a UserPortfolio (the "X2" state)
+model UserPortfolioAsset {
+  id              String @id @default(cuid())
+  userPortfolioId String
+  assetId         String
+
+  allocationPercentage Float @default(0.0)
+  costPerShare         Float @default(0.0) // weighted average cost per share
+  costPrice            Float @default(0.0) // total cost price (sum across sub-portfolios)
+  stock                Float @default(0.0) // total shares (sum across sub-portfolios)
+  closeValue           Float @default(0.0) // stock * current close price
+  lossGain             Float @default(0.0) // closeValue - costPrice
+
+  userPortfolio UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  asset         Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userPortfolioId, assetId])
+}
+
+// =====================
+// Sub-Portfolios (X, X1, X2-source snapshots)
+// =====================
+
+// Every time money is invested into a UserPortfolio, a SubPortfolio is created.
+// - generation = 0  → the original portfolio (X)
+// - generation = 1  → first top-up slice (X1)
+// - generation = 2  → second top-up slice (X2-source), etc.
+// After a top-up is merged, the UserPortfolioAssets are recalculated and a
+// new TopupEvent record marks the merge as complete.
+// SubPortfolios are kept for audit/report history and are never deleted.
+model SubPortfolio {
+  id              String        @id @default(cuid())
+  userPortfolioId String
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+
+  // 0 = original, 1 = first top-up, 2 = second top-up, …
+  generation Int @default(0)
+
+  // Label auto-generated: "{customName} - Gen {generation}" or override
+  label String
+
+  amountInvested  Float @default(0.0) // deposit amount for this slice
+  totalCostPrice  Float @default(0.0) // sum of cost prices for assets in this slice
+  totalCloseValue Float @default(0.0) // sum of close values for assets in this slice
+  totalLossGain   Float @default(0.0)
+
+  bankFee        Float @default(30)
+  transactionFee Float @default(10)
+  feeAtBank      Float @default(10)
+  totalFees      Float @default(50)
+  cashAtBank     Float @default(0.0)
+
+  // Snapshot date (when assets were bought / top-up was applied)
+  snapshotDate DateTime @default(now())
+
+  assets SubPortfolioAsset[]
+
+  // Link to the TopupEvent that merged this sub-portfolio (null if not yet merged or is generation 0 initial)
+  mergedByTopup   TopupEvent? @relation("MergedSubPortfolios", fields: [topupEventId], references: [id])
+  mergedByTopupId String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  topupEventId String?
+
+  @@index([userPortfolioId, generation])
+}
+
+// Asset positions within a SubPortfolio snapshot
+model SubPortfolioAsset {
+  id             String       @id @default(cuid())
+  subPortfolioId String
+  subPortfolio   SubPortfolio @relation(fields: [subPortfolioId], references: [id], onDelete: Cascade)
+  assetId        String
+  asset          Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  allocationPercentage Float @default(0.0)
+  costPerShare         Float @default(0.0)
+  costPrice            Float @default(0.0)
+  stock                Float @default(0.0)
+  closePrice           Float @default(0.0)
+  closeValue           Float @default(0.0)
+  lossGain             Float @default(0.0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([subPortfolioId, assetId])
+}
+
+// =====================
+// Top-up Events (Recalculation Audit Trail)
+// =====================
+
+// Whenever a user tops up a portfolio, a TopupEvent is created.
+// It records:
+//   - the deposit that triggered it
+//   - which sub-portfolios (X and X1) were merged
+//   - the resulting recalculated totals (the "X2" state)
+model TopupEvent {
+  id              String        @id @default(cuid())
+  userPortfolioId String
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+
+  // The deposit that funded this top-up
+  depositId String  @unique
+  deposit   Deposit @relation(fields: [depositId], references: [id], onDelete: Cascade)
+
+  topupAmount   Float // the new money added (X1 amount)
+  previousTotal Float // total invested before top-up (X total)
+
+  // Post-merge totals (X2 = X + X1)
+  newTotalInvested   Float @default(0.0)
+  newTotalCloseValue Float @default(0.0)
+  newTotalLossGain   Float @default(0.0)
+  newTotalFees       Float @default(0.0)
+  newNetAssetValue   Float @default(0.0)
+
+  status   TopupStatus @default(PENDING)
+  mergedAt DateTime?
+
+  // All sub-portfolios that were merged in this event
+  mergedSubPortfolios SubPortfolio[] @relation("MergedSubPortfolios")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userPortfolioId])
+}
+
+// =====================
+// Portfolio Summary (per user, aggregated)
+// =====================
+
 model PortfolioSummary {
-  id              String   @id @default(cuid())
-  cashAtBank      Float
-  userId          String
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  cashOutstanding Float
-  cashAvailable   Float
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // Aggregated across ALL of the user's portfolio wallets
+  cashAtBank      Float @default(0.0)
+  cashOutstanding Float @default(0.0)
+  cashAvailable   Float @default(0.0)
+  totalInvested   Float @default(0.0)
+  totalCloseValue Float @default(0.0)
+  totalLossGain   Float @default(0.0)
+  netAssetValue   Float @default(0.0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // =====================
@@ -450,23 +1236,23 @@ model ActivityLog {
   userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   action          String
-  module          String?   // e.g., "wallet", "portfolio", "auth"
-  status          String?   // e.g., "SUCCESS", "FAILED"
+  module          String?
+  status          String?
   description     String?
-  method          String?   // e.g., "POST", "GET", "WITHDRAW"
-  platform        String?   // e.g., "web", "mobile", "api"
-  performedByRole String?   // from user.roles
+  method          String?
+  platform        String?
+  performedByRole String?
   entityId        String?
-  entityType      String?   // e.g., "Deposit", "Withdrawal"
+  entityType      String?
   referrerUrl     String?
   ipAddress       String?
   userAgent       String?
   location        String?
-  isAutomated     Boolean?  @default(false)
+  isAutomated     Boolean? @default(false)
   durationMs      Int?
   errorMessage    String?
   metadata        Json?
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime @default(now())
 
   @@index([userId, action, createdAt])
 }
@@ -476,47 +1262,329 @@ model ActivityLog {
 // =====================
 
 model UserPortfolioPerformanceReport {
-  id              String       @id @default(cuid())
+  id              String        @id @default(cuid())
   userPortfolioId String
-  reportDate      DateTime     @default(now())
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
 
-  // Period this report covers (daily/weekly/monthly)
-  period          ReportPeriod @default(DAILY)
+  reportDate DateTime     @default(now())
+  period     ReportPeriod @default(DAILY)
 
-  // Portfolio totals
-  totalCostPrice  Float        @default(0)
-  totalCloseValue Float        @default(0)
-  totalLossGain   Float        @default(0)
-  totalPercentage Float        @default(0)
+  // Aggregated merged (X2) totals
+  totalCostPrice  Float @default(0)
+  totalCloseValue Float @default(0)
+  totalLossGain   Float @default(0)
+  totalPercentage Float @default(0)
+  totalFees       Float @default(0)
+  netAssetValue   Float @default(0)
 
-  // Relations
-  userPortfolio  UserPortfolio           @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
   assetBreakdown PortfolioAssetBreakdown[]
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  // Sub-portfolio breakdown for full drill-down in reports
+  subPortfolioSnapshots SubPortfolioReportSnapshot[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userPortfolioId, reportDate])
   @@index([reportDate])
   @@index([userPortfolioId, period, reportDate])
 }
 
-// Asset class breakdown (EQUITIES, ETFS, etc.)
 model PortfolioAssetBreakdown {
-  id            String      @id @default(cuid())
-  reportId      String
-  assetClass    AssetClass
+  id             String     @id @default(cuid())
+  reportId       String
+  assetClass     AssetClass
+  holdings       Int        @default(0)
+  totalCashValue Float      @default(0)
+  percentage     Float      @default(0)
 
-  holdings      Int         @default(0) // Number of different assets
-  totalCashValue Float      @default(0) // Sum of close values
-  percentage    Float       @default(0) // Percentage of total portfolio
-
-  report        UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
-
-  createdAt     DateTime @default(now())
+  report    UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  createdAt DateTime                       @default(now())
 
   @@unique([reportId, assetClass])
   @@index([reportId])
 }
 
+// Snapshot of each sub-portfolio at the time a performance report is generated.
+// This allows a report to show: "Portfolio X contributed $X, Top-up 1 contributed $Y, merged total $Z"
+model SubPortfolioReportSnapshot {
+  id       String                         @id @default(cuid())
+  reportId String
+  report   UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
+  subPortfolioId String
+  generation     Int
+  label          String
+
+  amountInvested  Float @default(0.0)
+  totalCostPrice  Float @default(0.0)
+  totalCloseValue Float @default(0.0)
+  totalLossGain   Float @default(0.0)
+  totalFees       Float @default(0.0)
+  cashAtBank      Float @default(0.0)
+
+  createdAt DateTime @default(now())
+
+  @@index([reportId])
+}
+
+
+
+enum CompanyType {
+  LIMITED
+  PARTNERSHIP
+  NGO
+  COOPERATIVE
+  SAVINGS_GROUP
+  MICROFINANCE
+}
+
+enum OwnershipType {
+  OWNERSHIP_BY_SENIOR
+  MANAGEMENT_OFFICIAL
+  OTHER
+}
+
+enum BeneficiaryRelation {
+  SPOUSE
+  CHILD
+  PARENT
+  SIBLING
+  OTHER
+}
+
+// =====================
+// Individual Onboarding
+// =====================
+
+model IndividualOnboarding {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // Agent selected during onboarding
+  agentId String?
+  agent   StaffProfile? @relation("IndividualOnboardingAgent", fields: [agentId], references: [id], onUpdate: Cascade)
+
+  // Personal info
+  fullName         String?
+  dateOfBirth      DateTime?
+  tin              String?   @unique  // Optional for individuals
+  avatarUrl        String?
+  homeAddress      String?
+  email            String?
+  phoneNumber      String?
+  employmentStatus String?
+  occupation       String?
+  companyName      String?   // employer name (optional)
+  hasBusiness      String?
+
+  // Investment profile
+  primaryGoal          String?
+  timeHorizon          String?
+  riskTolerance        String?
+  investmentExperience String?
+  sourceOfIncome       String?   // renamed from sourceOfWealth
+  employmentIncome     String?
+  expectedInvestment   String?
+  businessOwnership    String?
+
+  // PEP
+  isPEP                   String?
+  publicPosition          String?
+  relationshipToCountry   String?
+  familyMemberDetails     String?
+
+  // Legal/compliance
+  sanctionsOrLegal        String?
+  consentToDataCollection Boolean?
+  agreeToTerms            Boolean?
+
+  // Documents
+  nationalIdUrl     String?   // National ID or Passport (required)
+  passportPhotoUrl  String?
+  tinCertificateUrl String?
+  bankStatementUrl  String?   // Optional for individuals
+
+  isApproved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  beneficiaries Beneficiary[]
+  nextOfKin     NextOfKin[]
+}
+
+// =====================
+// Beneficiary (for Individual Onboarding)
+// =====================
+
+model Beneficiary {
+  id                     String               @id @default(cuid())
+  individualOnboardingId String
+  individualOnboarding   IndividualOnboarding @relation(fields: [individualOnboardingId], references: [id], onDelete: Cascade)
+
+  fullName    String
+  dateOfBirth DateTime?
+  phone       String
+  address     String?
+  relation    BeneficiaryRelation @default(OTHER)
+  tin         String?             // Optional
+
+  // Document upload
+  documentUrl String? // National ID or Passport scan
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([individualOnboardingId])
+}
+
+// =====================
+// Next of Kin (for Individual Onboarding)
+// =====================
+
+model NextOfKin {
+  id                     String               @id @default(cuid())
+  individualOnboardingId String
+  individualOnboarding   IndividualOnboarding @relation(fields: [individualOnboardingId], references: [id], onDelete: Cascade)
+
+  fullName    String
+  dateOfBirth DateTime?
+  phone       String
+  address     String?
+  relation    BeneficiaryRelation @default(OTHER)
+  tin         String?             // Optional
+
+  // Document upload
+  documentUrl String? // National ID or Passport scan
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([individualOnboardingId])
+}
+
+// =====================
+// Company Onboarding
+// =====================
+
+model CompanyOnboarding {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // Agent selected during onboarding
+  agentId String?
+  agent   StaffProfile? @relation("CompanyOnboardingAgent", fields: [agentId], references: [id], onUpdate: Cascade)
+
+  // Company details
+  companyName  String
+  email        String
+  logoUrl      String?
+  companyType  CompanyType
+  phoneNumbers String[] // Array of official phone numbers
+
+  // Company registration
+  registrationNumber  String?   @unique
+  tin                 String?   @unique
+  incorporationDate   DateTime?
+  companyAddress      String?
+  businessType        String?   // additional description if needed
+
+  // Investment profile
+  primaryGoal          String?
+  timeHorizon          String?
+  riskTolerance        String?
+  investmentExperience String?
+  sourceOfIncome       String?
+  expectedInvestment   String?
+
+  // PEP / Legal
+  isPEP                   String?
+  sanctionsOrLegal        String?
+  consentToDataCollection Boolean?
+  agreeToTerms            Boolean?
+
+  // Company documents
+  constitutionUrl              String?  // Required for SACCOs
+  tradingLicenseUrl            String?
+  bankStatementUrl             String?  // Required
+  tinCertificateUrl            String?
+  logoDocUrl                   String?
+  formA1Url                    String?
+  formS18Url                   String?
+  form18Url                    String?
+  form20Url                    String?
+  beneficialOwnershipFormUrl   String?
+  memorandumArticlesUrl        String?
+  officialAccountUrl           String?
+
+  isApproved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  directors CompanyDirector[]
+  ubos      CompanyUBO[]
+}
+
+// =====================
+// Company Director
+// =====================
+
+model CompanyDirector {
+  id                  String            @id @default(cuid())
+  companyOnboardingId String
+  companyOnboarding   CompanyOnboarding @relation(fields: [companyOnboardingId], references: [id], onDelete: Cascade)
+
+  fullName    String
+  email       String?
+  phone       String?
+  address     String?
+  dateOfBirth DateTime?
+  ninOrPassportNumber String?
+
+  // Document upload (National ID or Passport)
+  documentUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyOnboardingId])
+}
+
+// =====================
+// Company UBO (Ultimate Beneficial Owner)
+// =====================
+
+model CompanyUBO {
+  id                  String            @id @default(cuid())
+  companyOnboardingId String
+  companyOnboarding   CompanyOnboarding @relation(fields: [companyOnboardingId], references: [id], onDelete: Cascade)
+
+  fullName    String
+  email       String?
+  phone       String?
+  address     String?
+  dateOfBirth DateTime?
+  ninOrPassportNumber String?
+
+  ownershipType      OwnershipType @default(OTHER)
+  ownershipTypeOther String?       // Explanation if ownershipType = OTHER
+
+  // Document upload (National ID or Passport)
+  documentUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyOnboardingId])
+}
+
+// =====================
+// StaffProfile relation additions
+// Add these two lines to the StaffProfile model:
+//   individualOnboardingClients IndividualOnboarding[] @relation("IndividualOnboardingAgent")
+//   companyOnboardingClients    CompanyOnboarding[]    @relation("CompanyOnboardingAgent")
+// ===================

@@ -9,42 +9,45 @@ import {
   getPerformanceStatistics,
   cleanupPerformanceReports,
 } from "@/controllers/portfolio-performance-reports";
+import { generateUserPerformanceReports } from "@/controllers/portfolio-performance-report";
 
 const portfolioPerformanceReportsRouter = Router();
 
-// ── Static routes first (before /:id) ─────────────────────────────
+// ── Static / action routes first (before /:id) ────────────────────
 
-// List reports with filters
 portfolioPerformanceReportsRouter.get(
   "/portfolio-performance-reports",
   listPerformanceReports
 );
 
-// Get latest report for a portfolio
 portfolioPerformanceReportsRouter.get(
   "/portfolio-performance-reports/latest/:userPortfolioId",
   getLatestPerformanceReport
 );
 
-// Get performance statistics
 portfolioPerformanceReportsRouter.get(
   "/portfolio-performance-reports/stats/:userPortfolioId",
   getPerformanceStatistics
 );
 
-// Generate report manually for a specific portfolio
+// Generate for a single portfolio
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/generate",
   generatePerformanceReport
 );
 
-// Generate reports for all portfolios (cron job endpoint)
+// Generate for all portfolios of a single user
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-for-user",
+  generateUserPerformanceReports
+);
+
+// Generate for all portfolios system-wide (cron)
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/generate-all",
   generateAllPerformanceReports
 );
 
-// Cleanup old reports
 portfolioPerformanceReportsRouter.delete(
   "/portfolio-performance-reports/cleanup",
   cleanupPerformanceReports
@@ -52,7 +55,6 @@ portfolioPerformanceReportsRouter.delete(
 
 // ── Dynamic :id route last ─────────────────────────────────────────
 
-// Get specific report by ID
 portfolioPerformanceReportsRouter.get(
   "/portfolio-performance-reports/:id",
   getPerformanceReportById
