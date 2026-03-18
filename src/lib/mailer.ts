@@ -6,6 +6,8 @@ import * as React from "react";
 import { Resend } from "resend";
 import ResetPasswordEmail from "@/emails/reset-password-email";
 import VerificationCodeEmail from "@/emails/VerificationCodeEmail";
+import AccountVerifiedEmail from "@/emails/AccountVerifiedEmail";
+import OnboardingSubmittedEmail from "@/emails/OnboardingSubmittedEmail";
 
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
@@ -83,5 +85,38 @@ export async function sendVerificationCodeResend(args: {
     subject: "Your verification code",
     react: React.createElement(VerificationCodeEmail, { name, code }),
     tags: [{ name: "category", value: "email-verify" }],
+  });
+}
+
+// email onboarding submission confirmation
+export async function sendOnboardingSubmittedEmail(args: {
+  to: string;
+  name?: string;
+  isCompany?: boolean;
+}) {
+  const { to, name = "there", isCompany = false } = args;
+  return sendEmail({
+    to,
+    subject: "Your GoldKach application has been received",
+    react: React.createElement(OnboardingSubmittedEmail, { name, isCompany }),
+    tags: [{ name: "category", value: "onboarding-submitted" }],
+  });
+}
+ 
+/**
+ * Account verified / email verified confirmation.
+ * Sent after the user verifies their email address.
+ * Prompts them to log in and make a first deposit.
+ */
+export async function sendAccountVerifiedEmail(args: {
+  to: string;
+  name?: string;
+}) {
+  const { to, name = "there" } = args;
+  return sendEmail({
+    to,
+    subject: "Your GoldKach email has been verified — next steps",
+    react: React.createElement(AccountVerifiedEmail, { name }),
+    tags: [{ name: "category", value: "account-verified" }],
   });
 }

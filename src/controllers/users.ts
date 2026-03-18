@@ -10,7 +10,7 @@ import {
 } from "@/utils/tokens";
 import { AuthRequest } from "@/utils/auth";
 import { UserRole, UserStatus } from "@prisma/client";
-import { sendVerificationCodeResend } from "@/lib/mailer";
+import { sendAccountVerifiedEmail, sendVerificationCodeResend } from "@/lib/mailer";
 import { verifyRecaptcha } from "@/utils/recaptcha";
 
 /* --------------------------------- helpers --------------------------------- */
@@ -523,7 +523,17 @@ export async function updateUser(req: Request, res: Response) {
         imageUrl: true, emailVerified: true, isApproved: true,
         createdAt: true, updatedAt: true,
       },
+      
     });
+    if (isApproved === true && !existingUser.isApproved) {
+  try {
+    await sendAccountVerifiedEmail({
+      to: updatedUser.email,
+      name: updatedUser.firstName ?? updatedUser.name ?? "there",
+    });
+  } catch (emailError) {
+    console.error("updateUser: failed to send approval email:", emailError);
+  }}
 
     return res.status(200).json({ data: updatedUser, error: null });
   } catch (error) {
