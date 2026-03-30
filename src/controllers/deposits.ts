@@ -31,34 +31,35 @@ const SORTABLE_FIELDS = new Set<keyof Prisma.DepositOrderByWithRelationInput>([
 ]);
 
 const DEPOSIT_INCLUDE: Prisma.DepositInclude = {
-  user:           { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
-  createdBy:      { select: { id: true, firstName: true, lastName: true, role: true } },
-  approvedBy:     { select: { id: true, firstName: true, lastName: true, role: true } },
-  rejectedBy:     { select: { id: true, firstName: true, lastName: true, role: true } },
+  user:            { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+  createdBy:       { select: { id: true, firstName: true, lastName: true, role: true } },
+  approvedBy:      { select: { id: true, firstName: true, lastName: true, role: true } },
+  rejectedBy:      { select: { id: true, firstName: true, lastName: true, role: true } },
   portfolioWallet: true,
-  userPortfolio:  { select: { id: true, customName: true, portfolioId: true } },
+  masterWallet:    true,
+  userPortfolio:   { select: { id: true, customName: true, portfolioId: true } },
 };
 
 /* ------------------------------------------------------------------ */
-/*  Top-up logic                                                        */
+/*  Top-up logic (ALLOCATION: master wallet → portfolio wallet)        */
 /*                                                                      */
-/*  When an approved deposit targets an existing UserPortfolio,        */
-/*  we create a new SubPortfolio (X1), then merge X + X1 into X2      */
-/*  by recalculating the live UserPortfolioAsset records.              */
+/*  Creates SubPortfolio (X1), merges into X2 live positions,          */
+/*  creates TopupEvent audit record.                                    */
 /* ------------------------------------------------------------------ */
 
 async function applyTopup(
   tx: Prisma.TransactionClient,
   depositId: string,
   userPortfolioId: string,
-  topupAmount: number
+  topupAmount: number,
+  /** assetId → { costPerShare, closePrice } provided by staff at approval time */
+  assetPrices: Record<string, { costPerShare: number; closePrice: number }> = {}
 ) {
-  // Load the current portfolio with its wallet and live asset positions
   const up = await tx.userPortfolio.findUnique({
     where:   { id: userPortfolioId },
     include: {
-      wallet:     true,
-      userAssets: { include: { asset: { select: { id: true, closePrice: true } } } },
+      wallet:        true,
+      userAssets:    { include: { asset: { select: { id: true, closePrice: true } } } },
       subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
     },
   });
@@ -69,23 +70,54 @@ async function applyTopup(
   const nextGeneration   = (up.subPortfolios[0]?.generation ?? 0) + 1;
   const newTotalInvested = prevTotal + topupAmount;
 
-  // Fee defaults (same as initial enrollment)
-  const bankFee = 30, transactionFee = 10, feeAtBank = 10;
-  const totalFees = bankFee + transactionFee + feeAtBank;
+  // Fee rates configured on this portfolio's wallet (same rates applied per topup)
+  const bankFee        = up.wallet.bankFee;
+  const transactionFee = up.wallet.transactionFee;
+  const feeAtBank      = up.wallet.feeAtBank;
+  const totalFees      = bankFee + transactionFee + feeAtBank;
 
-  // 1. Create SubPortfolio for this top-up slice (X1)
-  //    Asset positions are proportioned from the top-up amount alone
+  // Sub-portfolio NAV = topup amount minus this topup's deductions
+  const topupNAV = topupAmount - totalFees;
+
+  // ─── 1. Sub-portfolio (X1) ─────────────────────────────────────────────────
+  // allocation% adopted from mother; costPerShare + closePrice entered by staff at approval;
+  // costPrice = allocationPct × topupNAV; stock = costPrice / costPerShare;
+  // closeValue = closePrice × stock; lossGain = closeValue − costPrice
   const subAssetRows = up.userAssets.map((ua) => {
-    const costPrice  = (ua.allocationPercentage / 100) * topupAmount;
-    const stock      = ua.costPerShare > 0 ? costPrice / ua.costPerShare : 0;
-    const closeValue = ua.asset.closePrice * stock;
+    const provided      = assetPrices[ua.assetId];
+    const effectiveCPS  = provided?.costPerShare ?? ua.costPerShare;
+    const effectiveCP   = provided?.closePrice   ?? ua.asset.closePrice;
+    const costPrice  = (ua.allocationPercentage / 100) * topupNAV;
+    const stock      = effectiveCPS > 0 ? costPrice / effectiveCPS : 0;
+    const closeValue = effectiveCP * stock;
     const lossGain   = closeValue - costPrice;
-    return { assetId: ua.assetId, allocationPercentage: ua.allocationPercentage, costPerShare: ua.costPerShare, costPrice, stock, closePrice: ua.asset.closePrice, closeValue, lossGain };
+    return {
+      assetId:              ua.assetId,
+      allocationPercentage: ua.allocationPercentage,
+      costPerShare:         effectiveCPS,
+      costPrice, stock,
+      closePrice:           effectiveCP,
+      closeValue, lossGain,
+    };
   });
+
+  // Update global asset.closePrice for each asset that had a price provided by staff
+  const assetPriceUpdates = Object.entries(assetPrices)
+    .filter(([, p]) => p.closePrice > 0)
+    .map(([assetId, p]) =>
+      tx.asset.update({ where: { id: assetId }, data: { closePrice: p.closePrice } })
+    );
+  if (assetPriceUpdates.length) await Promise.all(assetPriceUpdates);
+
+  // Map assetId → topup stock so we can accumulate into mother portfolio
+  const topupStockByAsset = new Map<string, number>(
+    subAssetRows.map((r) => [r.assetId, r.stock])
+  );
 
   const subTotalCostPrice  = subAssetRows.reduce((s, r) => s + r.costPrice, 0);
   const subTotalCloseValue = subAssetRows.reduce((s, r) => s + r.closeValue, 0);
-  const cashAtBank         = topupAmount - subTotalCostPrice;
+  // cashAtBank = undeployed amount (topupAmount − cost allocated to assets)
+  const cashAtBank = topupAmount - subTotalCostPrice;
 
   const sub = await tx.subPortfolio.create({
     data: {
@@ -98,7 +130,7 @@ async function applyTopup(
       totalLossGain:   subTotalCloseValue - subTotalCostPrice,
       bankFee, transactionFee, feeAtBank, totalFees,
       cashAtBank,
-      snapshotDate:    new Date(),
+      snapshotDate: new Date(),
     },
   });
 
@@ -109,45 +141,69 @@ async function applyTopup(
     });
   }
 
-  // 2. Recalculate merged (X2) live positions using newTotalInvested as NAV
-  let newTotalCloseValue = 0;
-  let newTotalCostPrice  = 0;
+  // ─── New mother portfolio (X2 merge) ──────────────────────────────────────
+  // totalInvested  = prevTotal + topupAmount
+  // cumulativeFees = prevTotalFees + this topup's fees  (bankFee + transFee + feeAtBank)
+  // NAV            = totalInvested − cumulativeFees
+  //
+  // For each asset:
+  //   stock        = motherStock + topupStock          ← accumulated
+  //   allocation%  = same as mother                   ← unchanged
+  //   closePrice   = current market price             ← from asset table
+  //   costPrice    = allocation% × NAV
+  //   costPerShare = costPrice / stock                ← recalculated
+  //   closeValue   = closePrice × stock
+  //   lossGain     = closeValue − costPrice
+  const newTotalFees     = up.wallet.totalFees + totalFees;
+  const newNetAssetValue = newTotalInvested - newTotalFees;
 
-  for (const ua of up.userAssets) {
-    const costPrice  = (ua.allocationPercentage / 100) * newTotalInvested;
-    const stock      = ua.costPerShare > 0 ? costPrice / ua.costPerShare : 0;
-    const closeValue = ua.asset.closePrice * stock;
-    const lossGain   = closeValue - costPrice;
+  // Build lookup: assetId → approval-time closePrice (from sub-portfolio rows)
+  const closePriceByAsset = new Map<string, number>(
+    subAssetRows.map((r) => [r.assetId, r.closePrice])
+  );
 
-    await tx.userPortfolioAsset.update({
-      where: { id: ua.id },
-      data:  { costPrice, stock, closeValue, lossGain },
-    });
+  // 2. Merge into mother portfolio — stock accumulates, everything else recalculates
+  const assetUpdates = up.userAssets.map((ua) => {
+    const topupStock   = topupStockByAsset.get(ua.assetId) ?? 0;
+    const newStock     = (ua.stock ?? 0) + topupStock;
+    const costPrice    = (ua.allocationPercentage / 100) * newNetAssetValue;
+    const costPerShare = newStock > 0 ? costPrice / newStock : 0;
+    // Use approval-time close price (same as sub-portfolio); fall back to stored price
+    const closePrice   = closePriceByAsset.get(ua.assetId) ?? ua.asset.closePrice;
+    const closeValue   = closePrice * newStock;
+    const lossGain     = closeValue - costPrice;
+    return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };
+  });
 
-    newTotalCloseValue += closeValue;
-    newTotalCostPrice  += costPrice;
-  }
+  await Promise.all(
+    assetUpdates.map((a) =>
+      tx.userPortfolioAsset.update({
+        where: { id: a.id },
+        data:  { stock: a.stock, costPrice: a.costPrice, costPerShare: a.costPerShare, closeValue: a.closeValue, lossGain: a.lossGain },
+      })
+    )
+  );
 
-  const newTotalFees      = up.wallet.totalFees + totalFees;
-  const newNetAssetValue  = newTotalCloseValue - newTotalFees;
+  const newTotalCloseValue = assetUpdates.reduce((s, a) => s + a.closeValue, 0);
+  const newTotalCostPrice  = assetUpdates.reduce((s, a) => s + a.costPrice, 0);
 
   // 3. Update UserPortfolio totals
   await tx.userPortfolio.update({
     where: { id: userPortfolioId },
     data: {
-      portfolioValue: newTotalCloseValue,
+      portfolioValue: newTotalCloseValue,        // market value (for performance display)
       totalInvested:  newTotalInvested,
       totalLossGain:  newTotalCloseValue - newTotalInvested,
     },
   });
 
-  // 4. Update PortfolioWallet
+  // 4. Update PortfolioWallet — increment balance and update fees/NAV
   await tx.portfolioWallet.update({
     where: { id: up.wallet.id },
     data: {
       balance:       { increment: topupAmount },
       totalFees:     newTotalFees,
-      netAssetValue: newNetAssetValue,
+      netAssetValue: newNetAssetValue,           // totalInvested − cumulativeFees
     },
   });
 
@@ -159,10 +215,10 @@ async function applyTopup(
       topupAmount,
       previousTotal:       prevTotal,
       newTotalInvested,
-      newTotalCloseValue,
+      newTotalCloseValue,                           // market value kept for performance reporting
       newTotalLossGain:    newTotalCloseValue - newTotalInvested,
       newTotalFees,
-      newNetAssetValue,
+      newNetAssetValue,                             // costPrice − cumulativeFees
       status:              "MERGED",
       mergedAt:            new Date(),
       mergedSubPortfolios: { connect: { id: sub.id } },
@@ -173,9 +229,10 @@ async function applyTopup(
 }
 
 /**
- * Sync MasterWallet by summing all PortfolioWallet NAVs for this user.
+ * Sync MasterWallet.netAssetValue by summing all PortfolioWallet NAVs.
+ * Does NOT touch MasterWallet.balance (cash available — managed separately).
  */
-async function syncMasterWallet(tx: Prisma.TransactionClient, userId: string) {
+async function syncMasterWalletNav(tx: Prisma.TransactionClient, userId: string) {
   const wallets = await tx.portfolioWallet.findMany({
     where:  { userPortfolio: { userId } },
     select: { netAssetValue: true },
@@ -197,6 +254,7 @@ export async function listDeposits(req: Request, res: Response) {
     const userPortfolioId   = (req.query.userPortfolioId as string) || "";
     const portfolioWalletId = (req.query.portfolioWalletId as string) || "";
     const createdById       = (req.query.createdById as string) || "";
+    const depositTarget     = (req.query.depositTarget as string) || "";
     const status            = asTxStatus(req.query.status);
 
     const page     = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
@@ -211,6 +269,7 @@ export async function listDeposits(req: Request, res: Response) {
         userPortfolioId   ? { userPortfolioId }   : {},
         portfolioWalletId ? { portfolioWalletId } : {},
         createdById       ? { createdById }       : {},
+        depositTarget     ? { depositTarget: depositTarget as any } : {},
         status            ? { transactionStatus: status } : {},
         q ? {
           OR: [
@@ -262,20 +321,17 @@ export async function getDepositById(req: Request, res: Response) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  CREATE  POST /deposits                                               */
+/*  CREATE DEPOSIT  POST /deposits                                       */
+/*                                                                      */
+/*  depositTarget = MASTER (default)                                    */
+/*    External money coming into the system. Lands in master wallet.   */
+/*    userPortfolioId is NOT required.                                  */
+/*                                                                      */
+/*  depositTarget = ALLOCATION                                           */
+/*    Internal transfer: master wallet → portfolio wallet.             */
+/*    userPortfolioId IS required.                                      */
+/*    Master wallet balance is checked & reserved at approval.         */
 /* ------------------------------------------------------------------ */
-/**
- * Deposit requests are created by admins/agents on behalf of a client.
- * Always starts as PENDING — no wallet changes until approved.
- *
- * Body: {
- *   userId, userPortfolioId,
- *   amount, depositTarget?,
- *   createdById, createdByName, createdByRole,
- *   mobileNo?, referenceNo?, accountNo?, method?, description?,
- *   transactionId?
- * }
- */
 export async function createDeposit(req: Request, res: Response) {
   try {
     const {
@@ -284,43 +340,72 @@ export async function createDeposit(req: Request, res: Response) {
       transactionId, mobileNo, referenceNo,
       accountNo, method, description,
       createdById, createdByName, createdByRole,
+      proofUrl, proofFileName,
     } = req.body as Partial<{
       userId: string; userPortfolioId: string;
       amount: number | string; depositTarget: string;
       transactionId: string; mobileNo: string; referenceNo: string;
       accountNo: string; method: string; description: string;
       createdById: string; createdByName: string; createdByRole: string;
+      proofUrl: string; proofFileName: string;
     }>;
 
-    const amt = num(amount, NaN);
-    if (!userId || !userPortfolioId || !Number.isFinite(amt) || amt <= 0) {
+    const target = (depositTarget === "ALLOCATION" ? "ALLOCATION" : "MASTER") as "MASTER" | "ALLOCATION";
+    const amt    = num(amount, NaN);
+
+    if (!userId || !Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({
         data: null,
-        error: "userId, userPortfolioId and a positive amount are required",
+        error: "userId and a positive amount are required",
       });
     }
 
-    // Verify user and portfolio exist, portfolio belongs to user
-    const [user, userPortfolio] = await Promise.all([
-      db.user.findUnique({ where: { id: userId }, select: { id: true } }),
-      db.userPortfolio.findUnique({
-        where:  { id: userPortfolioId },
-        select: { id: true, userId: true, wallet: { select: { id: true } } },
-      }),
-    ]);
+    if (target === "ALLOCATION" && !userPortfolioId) {
+      return res.status(400).json({
+        data: null,
+        error: "userPortfolioId is required for ALLOCATION deposits",
+      });
+    }
 
-    if (!user)          return res.status(404).json({ data: null, error: "User not found" });
-    if (!userPortfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
-    if (userPortfolio.userId !== userId) {
-      return res.status(403).json({ data: null, error: "Portfolio does not belong to this user" });
+    // Verify user and master wallet exist
+    const user = await db.user.findUnique({
+      where:  { id: userId },
+      select: { id: true, masterWallet: { select: { id: true, balance: true } } },
+    });
+    if (!user) return res.status(404).json({ data: null, error: "User not found" });
+
+    let portfolioWalletId: string | null = null;
+    let masterWalletId: string | null    = user.masterWallet?.id ?? null;
+
+    if (target === "ALLOCATION") {
+      // Verify portfolio exists and belongs to user
+      const up = await db.userPortfolio.findUnique({
+        where:  { id: userPortfolioId! },
+        select: { id: true, userId: true, wallet: { select: { id: true } } },
+      });
+      if (!up) return res.status(404).json({ data: null, error: "Portfolio not found" });
+      if (up.userId !== userId) {
+        return res.status(403).json({ data: null, error: "Portfolio does not belong to this user" });
+      }
+      portfolioWalletId = up.wallet?.id ?? null;
+
+      // Verify sufficient master wallet balance
+      const balance = user.masterWallet?.balance ?? 0;
+      if (balance < amt) {
+        return res.status(400).json({
+          data: null,
+          error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
+        });
+      }
     }
 
     const created = await db.deposit.create({
       data: {
         userId,
-        userPortfolioId,
-        portfolioWalletId: userPortfolio.wallet?.id ?? null,
-        depositTarget:     (depositTarget as any) ?? "PORTFOLIO",
+        userPortfolioId:   userPortfolioId  ?? null,
+        portfolioWalletId: portfolioWalletId ?? null,
+        masterWalletId:    masterWalletId    ?? null,
+        depositTarget:     target,
         amount:            amt,
         transactionStatus: Status.PENDING,
         transactionId:     transactionId  ?? null,
@@ -329,6 +414,8 @@ export async function createDeposit(req: Request, res: Response) {
         accountNo:         accountNo      ?? null,
         method:            method         ?? null,
         description:       description    ?? null,
+        proofUrl:          proofUrl       ?? null,
+        proofFileName:     proofFileName  ?? null,
         createdById:       createdById    ?? null,
         createdByName:     createdByName  ?? null,
         createdByRole:     (createdByRole as UserRole) ?? null,
@@ -349,7 +436,6 @@ export async function createDeposit(req: Request, res: Response) {
 /* ------------------------------------------------------------------ */
 /*  UPDATE  PATCH /deposits/:id                                          */
 /* ------------------------------------------------------------------ */
-/** Only PENDING deposits can be edited. Status changes go through approve/reject. */
 export async function updateDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -397,19 +483,26 @@ export async function updateDeposit(req: Request, res: Response) {
 
 /* ------------------------------------------------------------------ */
 /*  APPROVE  POST /deposits/:id/approve                                  */
+/*                                                                      */
+/*  MASTER deposit:                                                     */
+/*    → increment masterWallet.balance + totalDeposited                 */
+/*                                                                      */
+/*  ALLOCATION deposit:                                                  */
+/*    → verify masterWallet.balance >= amount                           */
+/*    → decrement masterWallet.balance                                  */
+/*    → run applyTopup() (creates SubPortfolio, updates PortfolioWallet)*/
 /* ------------------------------------------------------------------ */
-/**
- * PENDING → APPROVED
- * 1. Mark deposit approved + record approver
- * 2. If targeting an existing UserPortfolio → run top-up logic
- *    (creates SubPortfolio X1, merges into X2, creates TopupEvent)
- * 3. Update PortfolioWallet + MasterWallet
- */
 export async function approveDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { approvedById, approvedByName, transactionId } =
-      (req.body ?? {}) as { approvedById?: string; approvedByName?: string; transactionId?: string };
+    const { approvedById, approvedByName, transactionId, assetPrices } =
+      (req.body ?? {}) as {
+        approvedById?: string;
+        approvedByName?: string;
+        transactionId?: string;
+        /** assetId → { costPerShare, closePrice } provided by staff at approval time */
+        assetPrices?: Record<string, { costPerShare: number; closePrice: number }> | null;
+      };
 
     const existing = await db.deposit.findUnique({
       where:   { id },
@@ -422,6 +515,23 @@ export async function approveDeposit(req: Request, res: Response) {
     }
     if (existing.transactionStatus === Status.REJECTED) {
       return res.status(409).json({ data: null, error: "Cannot approve a rejected deposit" });
+    }
+
+    // For ALLOCATIONs, verify master wallet has enough balance
+    if (existing.depositTarget === "ALLOCATION") {
+      const mw = await db.masterWallet.findUnique({
+        where:  { userId: existing.userId },
+        select: { balance: true },
+      });
+      if (!mw || mw.balance < existing.amount) {
+        return res.status(400).json({
+          data:  null,
+          error: `Insufficient master wallet balance. Available: ${(mw?.balance ?? 0).toFixed(2)}`,
+        });
+      }
+      if (!existing.userPortfolioId) {
+        return res.status(400).json({ data: null, error: "ALLOCATION deposit requires a userPortfolioId" });
+      }
     }
 
     const approved = await db.$transaction(async (tx) => {
@@ -437,28 +547,32 @@ export async function approveDeposit(req: Request, res: Response) {
         },
       });
 
-      // 2. Top-up or initial portfolio funding
-      if (existing.userPortfolioId) {
-        await applyTopup(tx, id, existing.userPortfolioId, existing.amount);
-      } else if (existing.portfolioWalletId) {
-        // Deposit to master wallet only — update portfolio wallet balance
-        await tx.portfolioWallet.update({
-          where: { id: existing.portfolioWalletId },
-          data:  { balance: { increment: existing.amount }, netAssetValue: { increment: existing.amount } },
+      if (existing.depositTarget === "MASTER") {
+        // External deposit → land in master wallet cash balance
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
+          data: {
+            balance:        { increment: existing.amount },
+            totalDeposited: { increment: existing.amount },
+          },
         });
+      } else {
+        // ALLOCATION: master wallet balance → portfolio wallet (top-up)
+        // 2a. Deduct from master wallet balance
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
+          data:  { balance: { decrement: existing.amount } },
+        });
+
+        // 2b. Apply top-up logic (SubPortfolio, X2 merge, TopupEvent)
+        await applyTopup(tx, id, existing.userPortfolioId!, existing.amount, assetPrices ?? {});
+
+        // 2c. Sync master NAV from portfolio wallets
+        await syncMasterWalletNav(tx, existing.userId);
       }
 
-      // 3. Update MasterWallet totals
-      await tx.masterWallet.updateMany({
-        where: { userId: existing.userId },
-        data:  { totalDeposited: { increment: existing.amount } },
-      });
-
-      // 4. Sync master wallet NAV
-      await syncMasterWallet(tx, existing.userId);
-
       return row;
-    });
+    }, { timeout: 30000 });
 
     const result = await db.deposit.findUnique({ where: { id: approved.id }, include: DEPOSIT_INCLUDE });
     return res.status(200).json({ data: result, error: null });
@@ -511,14 +625,11 @@ export async function rejectDeposit(req: Request, res: Response) {
 
 /* ------------------------------------------------------------------ */
 /*  REVERSE  POST /deposits/:id/reverse                                  */
+/*                                                                      */
+/*  Reverses an APPROVED deposit:                                       */
+/*   MASTER     → decrement masterWallet.balance + totalDeposited       */
+/*   ALLOCATION → refund master balance, decrement portfolioWallet      */
 /* ------------------------------------------------------------------ */
-/**
- * Reverses an APPROVED deposit:
- * - Decrements PortfolioWallet balance + NAV
- * - Syncs MasterWallet
- * - Does NOT undo SubPortfolio history (kept for audit)
- * - Marks deposit as REJECTED
- */
 export async function reverseDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -547,24 +658,32 @@ export async function reverseDeposit(req: Request, res: Response) {
         },
       });
 
-      // Deduct from portfolio wallet
-      if (existing.portfolioWalletId) {
-        await tx.portfolioWallet.update({
-          where: { id: existing.portfolioWalletId },
+      if (existing.depositTarget === "MASTER") {
+        // Undo the master wallet cash credit
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
           data: {
-            balance:       { decrement: existing.amount },
-            netAssetValue: { decrement: existing.amount },
+            balance:        { decrement: existing.amount },
+            totalDeposited: { decrement: existing.amount },
           },
         });
+      } else {
+        // ALLOCATION reversal: refund back to master wallet balance, deduct from portfolio
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
+          data:  { balance: { increment: existing.amount } },
+        });
+        if (existing.portfolioWalletId) {
+          await tx.portfolioWallet.update({
+            where: { id: existing.portfolioWalletId },
+            data: {
+              balance:       { decrement: existing.amount },
+              netAssetValue: { decrement: existing.amount },
+            },
+          });
+        }
+        await syncMasterWalletNav(tx, existing.userId);
       }
-
-      // Update master wallet totals
-      await tx.masterWallet.updateMany({
-        where: { userId: existing.userId },
-        data:  { totalDeposited: { decrement: existing.amount } },
-      });
-
-      await syncMasterWallet(tx, existing.userId);
 
       return row;
     });
@@ -580,7 +699,6 @@ export async function reverseDeposit(req: Request, res: Response) {
 /* ------------------------------------------------------------------ */
 /*  DELETE  DELETE /deposits/:id                                         */
 /* ------------------------------------------------------------------ */
-/** Only PENDING deposits may be deleted. */
 export async function deleteDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;

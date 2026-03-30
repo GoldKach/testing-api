@@ -1,11 +1,12 @@
 
 
 // routes/auth.ts
-import { 
-  forgotPassword, 
-  resendVerification, 
-  resetPassword, 
+import {
+  forgotPassword,
+  resendVerification,
+  resetPassword,
   verifyEmail,
+  refreshToken,
 } from "@/controllers/auth";
 import { initiateLogin, resendLoginCode, verifyLoginCode } from "@/controllers/auth-controller-2fa";
 import { Router } from "express";
@@ -35,5 +36,6 @@ authRouter.post("/auth/reset-password", resetPassword);
 ====================== */
 authRouter.post("/auth/verify-email", verifyEmail);
 authRouter.post("/auth/resend-verification", resendVerification);
+authRouter.post("/refresh-token", refreshToken);
 
 export default authRouter;

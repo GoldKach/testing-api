@@ -4,8 +4,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // =====================
@@ -71,8 +72,13 @@ enum WalletType {
 }
 
 enum DepositTarget {
-  MASTER // free deposit into master wallet (not yet assigned to any portfolio)
-  PORTFOLIO // deposit directly into a specific portfolio wallet
+  MASTER     // external money deposited into master wallet (cash available)
+  ALLOCATION // internal transfer: master wallet → portfolio wallet (triggers top-up)
+}
+
+enum WithdrawalType {
+  HARD_WITHDRAWAL // cash out from master wallet to client's bank
+  REDEMPTION      // internal transfer: portfolio wallet → master wallet
 }
 
 // =====================
@@ -296,9 +302,12 @@ model MasterWallet {
   userId        String @unique
   user          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Cash sitting in master wallet — available for withdrawal or allocation to a portfolio
+  balance        Float @default(0.0)
+
   // Rolling totals across all portfolio wallets
-  totalDeposited Float @default(0.0) // sum of all approved deposits
-  totalWithdrawn Float @default(0.0) // sum of all approved withdrawals
+  totalDeposited Float @default(0.0) // sum of all approved external deposits
+  totalWithdrawn Float @default(0.0) // sum of all approved hard withdrawals
   totalFees      Float @default(0.0) // sum of all fees across portfolios
   netAssetValue  Float @default(0.0) // sum of NAV across all portfolio wallets
 
@@ -372,7 +381,7 @@ model Deposit {
   userPortfolioId String?
   userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
 
-  depositTarget     DepositTarget     @default(PORTFOLIO)
+  depositTarget     DepositTarget     @default(MASTER)
   amount            Float
   transactionId     String?           @unique
   transactionStatus TransactionStatus @default(PENDING)
@@ -381,6 +390,8 @@ model Deposit {
   accountNo         String?
   method            String?
   description       String?
+  proofUrl          String?
+  proofFileName     String?
 
   // If this deposit triggered a top-up, link to the TopupEvent
   topupEvent TopupEvent?
@@ -427,6 +438,7 @@ model Withdrawal {
   userPortfolioId String?
   userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
 
+  withdrawalType    WithdrawalType    @default(HARD_WITHDRAWAL)
   amount            Float
   transactionStatus TransactionStatus @default(PENDING)
   accountNo         String?
@@ -434,9 +446,9 @@ model Withdrawal {
   referenceNo       String
   transactionId     String?           @unique
   method            String?
-  bankName          String
-  bankAccountName   String
-  bankBranch        String
+  bankName          String            @default("")
+  bankAccountName   String            @default("")
+  bankBranch        String            @default("")
   description       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt

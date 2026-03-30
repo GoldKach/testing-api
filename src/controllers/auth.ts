@@ -8,6 +8,7 @@ import { sendResetEmailResend } from "@/utils/mailer";
 import {sendVerificationCodeResend } from "@/lib/mailer";
 import { UserStatus } from "@prisma/client";
 import jwt from "jsonwebtoken";
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken, TokenPayload } from "@/utils/tokens";
 
 
 const RESET_TTL_MIN = 30;
@@ -174,178 +175,65 @@ export async function verifyEmail(req: Request, res: Response) {
     where: { id: user.id },
     data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
   });
- 
+
   console.log("[verifyEmail] User verified:", user.id);
 
- 
+  const payload: TokenPayload = {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    phone: user.phone,
+  };
+
+  const accessToken = generateAccessToken(payload);
+  const refreshToken = generateRefreshToken(payload);
+
+  await db.refreshToken.create({
+    data: {
+      token: refreshToken,
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    },
+  });
+
   return res.status(200).json({
     ok: true,
     userId: user.id,
     email: user.email,
+    accessToken,
+    refreshToken,
   });
 }
 
-// const ACCESS_TTL = "15m";
-// const REFRESH_DAYS = 30;
+/* ============================
+   REFRESH ACCESS TOKEN
+============================= */
+export async function refreshToken(req: Request, res: Response) {
+  const { refreshToken: token } = req.body as { refreshToken: string };
 
-// export async function verifyEmail(req: Request, res: Response) {
-//   const { email, token } = req.body as { email: string; token: string };
-//   if (!email || !token) return res.status(400).json({ error: "Missing fields." });
+  if (!token) {
+    return res.status(400).json({ error: "Refresh token required" });
+  }
 
-//   const user = await db.user.findUnique({
-//     where: { email: email.trim().toLowerCase() },
-//   });
+  try {
+    const payload = verifyRefreshToken(token);
 
-//   if (!user || !user.token || user.token !== token) {
-//     return res.status(400).json({ error: "Invalid verification code." });
-//   }
+    const stored = await db.refreshToken.findUnique({ where: { token } });
 
-//   // Persist state and revoke old refresh tokens (optional but recommended)
-//   await db.$transaction([
-//     db.user.update({
-//       where: { id: user.id },
-//       data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
-//     }),
-//     db.refreshToken.deleteMany({ where: { userId: user.id } }),
-//   ]);
+    if (!stored || stored.revoked || stored.expiresAt < new Date()) {
+      return res.status(401).json({ error: "Refresh token expired or revoked" });
+    }
 
-//   // Mint new tokens (same logic you use in /login)
-//   const accessToken = jwt.sign(
-//     { sub: user.id, role: user.role },
-//     process.env.JWT_SECRET!,
-//     { expiresIn: ACCESS_TTL }
-//   );
+    const newPayload: TokenPayload = {
+      userId: payload.userId,
+      email: payload.email,
+      role: payload.role,
+      phone: (payload as any).phone ?? "",
+    };
 
-//   const REFRESH_TTL_MS = 1000 * 60 * 60 * 24 * 30;
-
-
-//   const refreshTokenValue = crypto.randomUUID();
-//   await db.refreshToken.create({
-//     data: {
-//       userId: user.id,
-//       token: refreshTokenValue,
-//       // set an expiry if your model has it; otherwise store createdAt and enforce TTL in code
-//       expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
-
-//     },
-//   });
-
-//   const safeUser = {
-//     id: user.id,
-//     email: user.email,
-//     role: user.role,
-//     firstName: user.firstName,
-//     lastName: user.lastName,
-//     imageUrl: user.imageUrl,
-//     status: UserStatus.ACTIVE,
-//   };
-
-//   return res.status(200).json({
-//     ok: true,
-//     message: "Email verified.",
-//     data: {
-//       user: safeUser,
-//       accessToken,
-//       refreshToken: refreshTokenValue,
-//     },
-//   });
-// }
-
-
-// export async function verifyEmail(req: Request, res: Response) {
-//   const { email, token } = req.body as { email: string; token: string };
-//   if (!email || !token) return res.status(400).json({ error: "Missing fields." });
-
-//   const user = await db.user.findUnique({
-//     where: { email: email.trim().toLowerCase() },
-//   });
-
-//   if (!user || !user.token || user.token !== token) {
-//     return res.status(400).json({ error: "Invalid verification code." });
-//   }
-
-//   // Mark verified; clear the one-time code
-//   await db.user.update({
-//     where: { id: user.id },
-//     data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
-//   });
-
-//   // No auth cookies/tokens here!
-//   return res.status(200).json({
-//     ok: true,
-//     userId: user.id,
-//     email: user.email,
-//   });
-// }
-
-// controllers/auth.ts - FIXED verifyEmail function
-
-// export async function verifyEmail(req: Request, res: Response) {
-//   const { email, token } = req.body as { email: string; token: string };
-  
-//   // Log what we received
-//   console.log("[verifyEmail] Received request");
-//   console.log("[verifyEmail] Email:", email);
-//   console.log("[verifyEmail] Token:", token);
-//   console.log("[verifyEmail] Token type:", typeof token);
-  
-//   if (!email || !token) {
-//     console.log("[verifyEmail] Missing fields");
-//     return res.status(400).json({ error: "Missing fields." });
-//   }
-
-//   // Normalize email
-//   const normalizedEmail = email.trim().toLowerCase();
-//   console.log("[verifyEmail] Normalized email:", normalizedEmail);
-
-//   // Find user
-//   const user = await db.user.findUnique({
-//     where: { email: normalizedEmail },
-//   });
-
-//   if (!user) {
-//     console.log("[verifyEmail] User not found");
-//     return res.status(400).json({ error: "Invalid verification code." });
-//   }
-
-//   console.log("[verifyEmail] User found - ID:", user.id);
-//   console.log("[verifyEmail] User token in DB:", user.token);
-//   console.log("[verifyEmail] User token type:", typeof user.token);
-
-//   // Check if user has a token
-//   if (!user.token) {
-//     console.log("[verifyEmail] No token in database (already used?)");
-//     return res.status(400).json({ error: "Invalid verification code." });
-//   }
-
-//   // 🔥 CRITICAL FIX: Normalize both tokens before comparison
-//   const dbToken = String(user.token).trim();
-//   const inputToken = String(token).trim();
-  
-//   console.log("[verifyEmail] Comparing tokens:");
-//   console.log("  - DB token:", dbToken);
-//   console.log("  - Input token:", inputToken);
-//   console.log("  - Match:", dbToken === inputToken);
-
-//   if (dbToken !== inputToken) {
-//     console.log("[verifyEmail] Token mismatch!");
-//     return res.status(400).json({ error: "Invalid verification code." });
-//   }
-
-//   console.log("[verifyEmail] Token verified successfully, updating user...");
-
-//   // Mark verified; clear the one-time code
-//   await db.user.update({
-//     where: { id: user.id },
-//     data: { emailVerified: true, status: UserStatus.ACTIVE, token: null },
-//   });
-
-//   console.log("[verifyEmail] User updated successfully");
-
-//   // No auth cookies/tokens here!
-//   return res.status(200).json({
-//     ok: true,
-//     userId: user.id,
-//     email: user.email,
-//   });
-// }
+    const accessToken = generateAccessToken(newPayload);
+    return res.status(200).json({ accessToken });
+  } catch {
+    return res.status(401).json({ error: "Invalid refresh token" });
+  }
+}

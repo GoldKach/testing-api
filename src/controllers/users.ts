@@ -73,14 +73,32 @@ const userDetailSelect = {
   createdAt:     true,
   updatedAt:     true,
 
-  // ── Onboarding (new split schema — include both, only one will be non-null) ──
+  // ── Onboarding (new split schema — include both, useronly one will be non-null) ──
   individualOnboarding: {
     select: {
-      id:           true,
-      fullName:     true,
-      // entityType:   true,
-      isApproved:   true,
-      createdAt:    true,
+      id:                      true,
+      fullName:                true,
+      isApproved:              true,
+      createdAt:               true,
+      dateOfBirth:             true,
+      tin:                     true,
+      homeAddress:             true,
+      employmentStatus:        true,
+      occupation:              true,
+      companyName:             true,
+      primaryGoal:             true,
+      timeHorizon:             true,
+      riskTolerance:           true,
+      investmentExperience:    true,
+      sourceOfIncome:          true,
+      expectedInvestment:      true,
+      isPEP:                   true,
+      consentToDataCollection: true,
+      agreeToTerms:            true,
+      nationalIdUrl:           true,
+      passportPhotoUrl:        true,
+      tinCertificateUrl:       true,
+      bankStatementUrl:        true,
     },
   },
   companyOnboarding: {
@@ -98,38 +116,64 @@ const userDetailSelect = {
     select: {
       id:             true,
       accountNumber:  true,
+      balance:        true,
       totalDeposited: true,
       totalWithdrawn: true,
       totalFees:      true,
       netAssetValue:  true,
       status:         true,
+      updatedAt:      true,
     },
   },
 
   deposits: {
-    where:   { transactionStatus: "PENDING" as const },
     orderBy: { createdAt: "desc" as const },
-    take:    10,
+    take:    20,
     select: {
       id:                true,
       amount:            true,
       transactionStatus: true,
       depositTarget:     true,
       userPortfolioId:   true,
+      transactionId:     true,
+      referenceNo:       true,
+      mobileNo:          true,
+      accountNo:         true,
+      method:            true,
+      description:       true,
       createdByName:     true,
+      approvedByName:    true,
+      approvedAt:        true,
+      rejectedByName:    true,
+      rejectedAt:        true,
+      rejectReason:      true,
       createdAt:         true,
     },
   },
   withdrawals: {
-    where:   { transactionStatus: "PENDING" as const },
     orderBy: { createdAt: "desc" as const },
-    take:    10,
+    take:    20,
     select: {
       id:                true,
       amount:            true,
       transactionStatus: true,
       userPortfolioId:   true,
+      withdrawalType:    true,
+      transactionId:     true,
+      referenceNo:       true,
+      accountNo:         true,
+      accountName:       true,
+      method:            true,
+      bankName:          true,
+      bankAccountName:   true,
+      bankBranch:        true,
+      description:       true,
       createdByName:     true,
+      approvedByName:    true,
+      approvedAt:        true,
+      rejectedByName:    true,
+      rejectedAt:        true,
+      rejectReason:      true,
       createdAt:         true,
     },
   },
@@ -442,8 +486,23 @@ export async function getUserById(req: Request, res: Response) {
 
   try {
     const user = await db.user.findUnique({
-      where:  { id },
-      select: userDetailSelect,
+      where: { id },
+      select: {
+        ...userDetailSelect,
+        // Full onboarding data for detail view
+        individualOnboarding: {
+          include: {
+            beneficiaries: true,
+            nextOfKin: true,
+          },
+        },
+        companyOnboarding: {
+          include: {
+            directors: true,
+            ubos: true,
+          },
+        },
+      },
     });
 
     if (!user) return res.status(404).json({ data: null, error: "User not found" });
@@ -526,14 +585,25 @@ export async function updateUser(req: Request, res: Response) {
       
     });
     if (isApproved === true && !existingUser.isApproved) {
-  try {
-    await sendAccountVerifiedEmail({
-      to: updatedUser.email,
-      name: updatedUser.firstName ?? updatedUser.name ?? "there",
-    });
-  } catch (emailError) {
-    console.error("updateUser: failed to send approval email:", emailError);
-  }}
+      // Also approve the onboarding record so the KYC status reflects correctly
+      await db.individualOnboarding.updateMany({
+        where: { userId: id },
+        data:  { isApproved: true },
+      }).catch(() => {}); // non-fatal if no onboarding exists
+      await db.companyOnboarding.updateMany({
+        where: { userId: id },
+        data:  { isApproved: true },
+      }).catch(() => {});
+
+      try {
+        await sendAccountVerifiedEmail({
+          to: updatedUser.email,
+          name: updatedUser.firstName ?? updatedUser.name ?? "there",
+        });
+      } catch (emailError) {
+        console.error("updateUser: failed to send approval email:", emailError);
+      }
+    }
 
     return res.status(200).json({ data: updatedUser, error: null });
   } catch (error) {
@@ -552,8 +622,8 @@ export async function deleteUser(req: AuthRequest, res: Response) {
     const existingUser = await db.user.findUnique({ where: { id } });
     if (!existingUser) return res.status(404).json({ data: null, error: "User not found" });
 
-    await db.user.update({ where: { id }, data: { status: UserStatus.DEACTIVATED } });
-    return res.status(200).json({ data: null, message: "User deactivated successfully" });
+    await db.user.delete({ where: { id } });
+    return res.status(200).json({ data: null, message: "User deleted successfully" });
   } catch (error) {
     console.error("Error deleting user:", error);
     return res.status(500).json({ data: null, error: "Failed to delete user" });

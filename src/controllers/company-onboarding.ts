@@ -4,7 +4,7 @@ import { db } from "@/db/db";
 import { CompanyType, OwnershipType, Prisma } from "@prisma/client";
 
 function getUserId(req: Request): string | undefined {
-  return (req as any)?.user?.id || (req.body?.userId as string) || (req.query?.userId as string);
+  return (req as any)?.user?.userId;
 }
 
 function parseDate(d?: string | null): Date | null {
@@ -479,5 +479,28 @@ export async function getCompanyUBOs(req: Request, res: Response) {
   } catch (e) {
     console.error("getCompanyUBOs error:", e);
     return res.status(500).json({ error: "Failed to load UBOs." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/company/:id/approve
+// Sets isApproved = true on the CompanyOnboarding record.
+// ---------------------------------------------------------------------------
+export async function approveCompanyOnboarding(req: Request, res: Response) {
+  const { id } = req.params;
+  try {
+    const record = await db.companyOnboarding.findUnique({ where: { id }, select: { id: true } });
+    if (!record) return res.status(404).json({ error: "Company onboarding record not found." });
+
+    const updated = await db.companyOnboarding.update({
+      where: { id },
+      data: { isApproved: true },
+      select: { id: true, userId: true, isApproved: true, updatedAt: true },
+    });
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("approveCompanyOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to approve onboarding." });
   }
 }

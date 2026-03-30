@@ -172,14 +172,30 @@ export async function verifyLoginCode(req: Request, res: Response) {
     // Find user
     const user = await db.user.findUnique({
       where: { id: userId },
+      include: {
+        individualOnboarding: { select: { isApproved: true } },
+        companyOnboarding: { select: { isApproved: true } },
+      },
     });
 
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        data: null, 
-        error: "User not found" 
+        data: null,
+        error: "User not found"
       });
+    }
+
+    // Block login if USER role has submitted but unapproved onboarding
+    if (user.role === "USER") {
+      const onboarding = user.individualOnboarding ?? user.companyOnboarding;
+      if (onboarding && onboarding.isApproved === false) {
+        return res.status(403).json({
+          success: false,
+          data: null,
+          error: "ONBOARDING_PENDING_APPROVAL",
+        });
+      }
     }
 
     if (!user.token) {

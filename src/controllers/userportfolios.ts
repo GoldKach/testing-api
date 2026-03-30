@@ -152,20 +152,19 @@ async function recomputeUPAsFor(userPortfolioId: string, client: Tx = db) {
     totalCostPrice      += costPrice;
   }
 
+  // totalInvested = NAV + totalFees (NAV is stored on the wallet)
+  const totalInvested = nav + toNumber(up.wallet.totalFees, 0);
+
   await client.userPortfolio.update({
     where: { id: up.id },
     data: {
       portfolioValue: totalPortfolioValue,
-      totalInvested:  totalCostPrice,
-      totalLossGain:  totalPortfolioValue - totalCostPrice,
+      totalInvested,
+      totalLossGain:  totalPortfolioValue - totalInvested,
     },
   });
 
-  // Sync portfolio wallet NAV
-  await client.portfolioWallet.update({
-    where: { id: up.wallet.id },
-    data:  { netAssetValue: totalPortfolioValue },
-  });
+  // NAV is fixed (totalInvested − totalFees) — do not overwrite with market value
 
   return { count: up.userAssets.length, totalPortfolioValue };
 }
@@ -207,12 +206,21 @@ async function syncMasterWallet(client: Tx, userId: string) {
  */
 export async function createUserPortfolio(req: Request, res: Response) {
   try {
-    const { userId, portfolioId, customName, amountInvested, assetAllocations } =
-      req.body as {
+    const {
+      userId, portfolioId, customName,
+      amountInvested,
+      bankFee: bankFeeInput,
+      transactionFee: transactionFeeInput,
+      feeAtBank: feeAtBankInput,
+      assetAllocations,
+    } = req.body as {
         userId?: string;
         portfolioId?: string;
         customName?: string;
         amountInvested?: number | string;
+        bankFee?: number | string;
+        transactionFee?: number | string;
+        feeAtBank?: number | string;
         assetAllocations?: Array<{
           assetId: string;
           allocationPercentage: number;
@@ -233,10 +241,13 @@ export async function createUserPortfolio(req: Request, res: Response) {
       });
     }
 
+    // amountInvested is optional — portfolio can be created with 0 and funded later via ALLOCATION
     const investedAmt = toNumber(amountInvested, 0);
-    if (investedAmt <= 0) {
-      return res.status(400).json({ data: null, error: "amountInvested must be > 0." });
-    }
+
+    // Fee rates: use provided values, fall back to defaults
+    const bankFee        = toNumber(bankFeeInput,        30);
+    const transactionFee = toNumber(transactionFeeInput, 10);
+    const feeAtBank      = toNumber(feeAtBankInput,      10);
 
     // Validate each allocation entry
     for (const a of assetAllocations) {
@@ -289,11 +300,14 @@ export async function createUserPortfolio(req: Request, res: Response) {
       }
     }
 
-    // Pre-compute rows using amountInvested as the NAV for this slice
+    // NAV = totalInvested − totalFees; costPrice = allocationPercentage × NAV
+    const totalFees  = bankFee + transactionFee + feeAtBank;
+    const navAmt     = investedAmt - totalFees;
+
     const rows = assetAllocations.map((a) => {
       const closePrice = toNumber(assetMap.get(a.assetId)!.closePrice, 0);
       const { costPrice, stock, closeValue, lossGain } = computeUPA(
-        investedAmt,
+        navAmt,
         a.allocationPercentage,
         a.costPerShare,
         closePrice
@@ -302,13 +316,7 @@ export async function createUserPortfolio(req: Request, res: Response) {
     });
 
     const totalCloseValue = rows.reduce((s, r) => s + r.closeValue, 0);
-
-    // Default fee structure
-    const bankFee        = 30;
-    const transactionFee = 10;
-    const feeAtBank      = 10;
-    const totalFees      = bankFee + transactionFee + feeAtBank;
-    const cashAtBank     = investedAmt - rows.reduce((s, r) => s + r.costPrice, 0);
+    const cashAtBank      = investedAmt - rows.reduce((s, r) => s + r.costPrice, 0);
 
     const upId = await db.$transaction(async (tx) => {
       // 1. Create UserPortfolio
@@ -334,7 +342,7 @@ export async function createUserPortfolio(req: Request, res: Response) {
           transactionFee,
           feeAtBank,
           totalFees,
-          netAssetValue:   totalCloseValue,
+          netAssetValue:   navAmt,
           status:          "ACTIVE",
         },
       });
@@ -389,14 +397,13 @@ export async function createUserPortfolio(req: Request, res: Response) {
         skipDuplicates: true,
       });
 
-      // 6. Update MasterWallet totals
-      await tx.masterWallet.update({
-        where: { userId },
-        data: {
-          totalDeposited: { increment: investedAmt },
-          netAssetValue:  { increment: totalCloseValue },
-        },
-      });
+      // 6. Sync MasterWallet NAV (balance stays unchanged — allocation is managed via deposit ALLOCATION flow)
+      if (investedAmt > 0) {
+        await tx.masterWallet.update({
+          where: { userId },
+          data:  { netAssetValue: { increment: totalCloseValue } },
+        });
+      }
 
       return up.id;
     }, { timeout: 20_000, maxWait: 5_000 });
@@ -566,14 +573,15 @@ export async function updateUserPortfolio(req: Request, res: Response) {
         const totalClose = allAssets.reduce((s, a) => s + toNumber(a.closeValue, 0), 0);
         const totalCost  = allAssets.reduce((s, a) => s + toNumber(a.costPrice, 0), 0);
 
+        // totalCost = Σ(alloc% × NAV) = NAV; totalInvested = NAV + totalFees
+        const walletTotalFees = toNumber(current.wallet?.totalFees, 0);
+        const totalInvested   = totalCost + walletTotalFees;
+
         await tx.userPortfolio.update({
           where: { id },
-          data:  { portfolioValue: totalClose, totalInvested: totalCost, totalLossGain: totalClose - totalCost },
+          data:  { portfolioValue: totalClose, totalInvested, totalLossGain: totalClose - totalInvested },
         });
-        await tx.portfolioWallet.updateMany({
-          where: { userPortfolioId: id },
-          data:  { netAssetValue: totalClose },
-        });
+        // NAV is fixed (totalInvested − totalFees) — do not overwrite with market value
       }
 
       // Full recompute from current wallet NAV

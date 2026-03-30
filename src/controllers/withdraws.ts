@@ -21,35 +21,85 @@ function num(v: any, def = 0): number {
 function parseIncludeParam(raw?: string) {
   const inc = (raw || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   const include: Prisma.WithdrawalInclude = {};
-  if (inc.includes("user"))             include.user = true;
-  if (inc.includes("portfoliowallet"))  include.portfolioWallet = true;
-  if (inc.includes("masterwallet"))     include.masterWallet = true;
-  if (inc.includes("userportfolio"))    include.userPortfolio = true;
-  if (inc.includes("createdby"))        include.createdBy = true;
-  if (inc.includes("approvedby"))       include.approvedBy = true;
-  if (inc.includes("rejectedby"))       include.rejectedBy = true;
+  if (inc.includes("user"))            include.user = true;
+  if (inc.includes("portfoliowallet")) include.portfolioWallet = true;
+  if (inc.includes("masterwallet"))    include.masterWallet = true;
+  if (inc.includes("userportfolio"))   include.userPortfolio = true;
+  if (inc.includes("createdby"))       include.createdBy = true;
+  if (inc.includes("approvedby"))      include.approvedBy = true;
+  if (inc.includes("rejectedby"))      include.rejectedBy = true;
   return include;
 }
 
 const SORTABLE_FIELDS = new Set<keyof Prisma.WithdrawalOrderByWithRelationInput>([
-  "createdAt",
-  "amount",
-  "transactionStatus",
-  "updatedAt",
+  "createdAt", "amount", "transactionStatus", "updatedAt",
 ]);
+
+/* ---------------------------------- helpers -------------------------------- */
+
+/**
+ * Recalculate all live UserPortfolioAsset positions after portfolio wallet NAV changes.
+ */
+async function recomputePortfolioFromNav(
+  tx: Prisma.TransactionClient,
+  userPortfolioId: string,
+  newNetAssetValue: number
+) {
+  const userPortfolio = await tx.userPortfolio.findUnique({
+    where:   { id: userPortfolioId },
+    include: { userAssets: { include: { asset: { select: { id: true, closePrice: true } } } } },
+  });
+  if (!userPortfolio) return;
+
+  let totalPortfolioValue = 0;
+  let totalCostPrice      = 0;
+
+  for (const ua of userPortfolio.userAssets) {
+    const costPrice  = (ua.allocationPercentage / 100) * newNetAssetValue;
+    const stock      = ua.costPerShare > 0 ? costPrice / ua.costPerShare : 0;
+    const closeValue = ua.asset.closePrice * stock;
+    const lossGain   = closeValue - costPrice;
+
+    await tx.userPortfolioAsset.update({
+      where: { id: ua.id },
+      data:  { costPrice, stock, closeValue, lossGain },
+    });
+
+    totalPortfolioValue += closeValue;
+    totalCostPrice      += costPrice;
+  }
+
+  await tx.userPortfolio.update({
+    where: { id: userPortfolioId },
+    data: {
+      portfolioValue: totalPortfolioValue,
+      totalInvested:  totalCostPrice,
+      totalLossGain:  totalPortfolioValue - totalCostPrice,
+    },
+  });
+}
+
+/**
+ * Sync MasterWallet.netAssetValue by summing all PortfolioWallet NAVs.
+ * Does NOT touch balance (cash available — managed separately).
+ */
+async function syncMasterWalletNav(tx: Prisma.TransactionClient, userId: string) {
+  const wallets = await tx.portfolioWallet.findMany({
+    where:  { userPortfolio: { userId } },
+    select: { netAssetValue: true },
+  });
+  const totalNav = wallets.reduce((sum, w) => sum + w.netAssetValue, 0);
+  await tx.masterWallet.updateMany({
+    where: { userId },
+    data:  { netAssetValue: totalNav },
+  });
+}
 
 /* ---------------------------------- LIST ----------------------------------- */
 /**
  * GET /withdrawals
- * Query:
- *  - q?             search referenceNo, method, bankName, accountNo/accountName
- *  - userId?        filter by client
- *  - userPortfolioId? filter by portfolio
- *  - portfolioWalletId?
- *  - masterWalletId?
- *  - status?        PENDING | APPROVED | REJECTED
- *  - page?, pageSize?, sortBy?, order?
- *  - include?       "user,portfolioWallet,masterWallet,userPortfolio,createdBy,approvedBy,rejectedBy"
+ * Query: q?, userId?, userPortfolioId?, portfolioWalletId?, masterWalletId?,
+ *        withdrawalType?, status?, page?, pageSize?, sortBy?, order?, include?
  */
 export async function listWithdrawals(req: Request, res: Response) {
   try {
@@ -58,6 +108,7 @@ export async function listWithdrawals(req: Request, res: Response) {
     const userPortfolioId  = (req.query.userPortfolioId as string) || "";
     const portfolioWalletId = (req.query.portfolioWalletId as string) || "";
     const masterWalletId   = (req.query.masterWalletId as string) || "";
+    const withdrawalType   = (req.query.withdrawalType as string) || "";
     const status           = asStatus(req.query.status);
     const include          = parseIncludeParam(req.query.include as string | undefined);
 
@@ -69,23 +120,22 @@ export async function listWithdrawals(req: Request, res: Response) {
 
     const where: Prisma.WithdrawalWhereInput = {
       AND: [
-        userId           ? { userId }           : {},
-        userPortfolioId  ? { userPortfolioId }  : {},
+        userId            ? { userId }            : {},
+        userPortfolioId   ? { userPortfolioId }   : {},
         portfolioWalletId ? { portfolioWalletId } : {},
-        masterWalletId   ? { masterWalletId }   : {},
-        status           ? { transactionStatus: status } : {},
-        q
-          ? {
-              OR: [
-                { referenceNo:     { contains: q, mode: "insensitive" } },
-                { method:          { contains: q, mode: "insensitive" } },
-                { bankName:        { contains: q, mode: "insensitive" } },
-                { accountNo:       { contains: q, mode: "insensitive" } },
-                { accountName:     { contains: q, mode: "insensitive" } },
-                { createdByName:   { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {},
+        masterWalletId    ? { masterWalletId }    : {},
+        withdrawalType    ? { withdrawalType: withdrawalType as any } : {},
+        status            ? { transactionStatus: status } : {},
+        q ? {
+          OR: [
+            { referenceNo:   { contains: q, mode: "insensitive" } },
+            { method:        { contains: q, mode: "insensitive" } },
+            { bankName:      { contains: q, mode: "insensitive" } },
+            { accountNo:     { contains: q, mode: "insensitive" } },
+            { accountName:   { contains: q, mode: "insensitive" } },
+            { createdByName: { contains: q, mode: "insensitive" } },
+          ],
+        } : {},
       ],
     };
 
@@ -94,8 +144,8 @@ export async function listWithdrawals(req: Request, res: Response) {
       db.withdrawal.findMany({
         where,
         orderBy: { [sortBy]: order },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip:    (page - 1) * pageSize,
+        take:    pageSize,
         include: Object.keys(include).length ? include : undefined,
       }),
     ]);
@@ -112,18 +162,15 @@ export async function listWithdrawals(req: Request, res: Response) {
 }
 
 /* ----------------------------------- GET ----------------------------------- */
-/** GET /withdrawals/:id */
 export async function getWithdrawalById(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const include = parseIncludeParam(req.query.include as string | undefined);
-
     const row = await db.withdrawal.findUnique({
-      where: { id },
+      where:   { id },
       include: Object.keys(include).length ? include : undefined,
     });
     if (!row) return res.status(404).json({ data: null, error: "Withdrawal not found" });
-
     return res.status(200).json({ data: row, error: null });
   } catch (error) {
     console.error("getWithdrawalById error:", error);
@@ -134,14 +181,16 @@ export async function getWithdrawalById(req: Request, res: Response) {
 /* -------------------------------- CREATE ----------------------------------- */
 /**
  * POST /withdrawals
- * Created by an admin/agent on behalf of a client.
- * Body: {
- *   userId, userPortfolioId, portfolioWalletId?,  masterWalletId?,
- *   amount, referenceNo, bankName, bankAccountName, bankBranch,
- *   createdById, createdByName, createdByRole,
- *   transactionId?, method?, accountNo?, accountName?, description?
- * }
- * Starts as PENDING — no balance deduction yet.
+ *
+ * withdrawalType = HARD_WITHDRAWAL (default)
+ *   Cash out to client's bank. Deducts from master wallet balance.
+ *   userPortfolioId is NOT required (it's from the master wallet).
+ *   Bank details (bankName, bankAccountName, bankBranch) ARE required.
+ *
+ * withdrawalType = REDEMPTION
+ *   Internal: portfolio wallet → master wallet balance.
+ *   userPortfolioId IS required.
+ *   Bank details are NOT required.
  */
 export async function createWithdrawal(req: Request, res: Response) {
   try {
@@ -150,6 +199,7 @@ export async function createWithdrawal(req: Request, res: Response) {
       userPortfolioId,
       portfolioWalletId,
       masterWalletId,
+      withdrawalType,
       amount,
       referenceNo,
       transactionId,
@@ -168,74 +218,203 @@ export async function createWithdrawal(req: Request, res: Response) {
       userPortfolioId: string;
       portfolioWalletId: string;
       masterWalletId: string;
+      withdrawalType: string;
       amount: number | string;
       referenceNo: string;
-      transactionId?: string | null;
-      method?: string | null;
-      accountNo?: string | null;
-      accountName?: string | null;
+      transactionId: string | null;
+      method: string | null;
+      accountNo: string | null;
+      accountName: string | null;
       bankName: string;
       bankAccountName: string;
       bankBranch: string;
-      description?: string | null;
-      createdById?: string;
-      createdByName?: string;
-      createdByRole?: string;
+      description: string | null;
+      createdById: string;
+      createdByName: string;
+      createdByRole: string;
     }>;
 
-    const amt = num(amount, NaN);
+    const wType = (withdrawalType === "REDEMPTION" ? "REDEMPTION" : "HARD_WITHDRAWAL") as "HARD_WITHDRAWAL" | "REDEMPTION";
+    const amt   = num(amount, NaN);
 
-    if (
-      !userId || !userPortfolioId || !referenceNo ||
-      !bankName || !bankAccountName || !bankBranch ||
-      !Number.isFinite(amt) || amt <= 0
-    ) {
+    if (!userId || !referenceNo || !Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({
         data: null,
-        error: "userId, userPortfolioId, referenceNo, bankName, bankAccountName, bankBranch and a positive amount are required",
+        error: "userId, referenceNo and a positive amount are required",
       });
     }
 
-    // Verify client and portfolio exist, and the portfolio belongs to this user
-    const [user, userPortfolio] = await db.$transaction([
-      db.user.findUnique({ where: { id: userId }, select: { id: true } }),
-      db.userPortfolio.findUnique({
-        where: { id: userPortfolioId },
-        select: { id: true, userId: true, wallet: { select: { id: true, netAssetValue: true } } },
-      }),
-    ]);
+    // Verify user + fetch master wallet
+    const user = await db.user.findUnique({
+      where:  { id: userId },
+      select: { id: true, masterWallet: { select: { id: true, balance: true } } },
+    });
+    if (!user) return res.status(404).json({ data: null, error: "User not found" });
 
-    if (!user)          return res.status(404).json({ data: null, error: "User not found" });
-    if (!userPortfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
-    if (userPortfolio.userId !== userId) {
-      return res.status(403).json({ data: null, error: "Portfolio does not belong to this user" });
+    const resolvedMasterWalletId = masterWalletId ?? user.masterWallet?.id ?? null;
+
+    let resolvedPortfolioWalletId: string | null = null;
+    let resolvedUserPortfolioId: string | null   = userPortfolioId ?? null;
+
+    if (wType === "HARD_WITHDRAWAL") {
+      // Must have bank details; deducts from master wallet — requires admin approval
+      if (!bankName || !bankAccountName || !bankBranch) {
+        return res.status(400).json({
+          data: null,
+          error: "bankName, bankAccountName and bankBranch are required for HARD_WITHDRAWAL",
+        });
+      }
+
+      const created = await db.withdrawal.create({
+        data: {
+          userId,
+          userPortfolioId:   resolvedUserPortfolioId,
+          portfolioWalletId: resolvedPortfolioWalletId,
+          masterWalletId:    resolvedMasterWalletId,
+          withdrawalType:    wType,
+          amount:            amt,
+          referenceNo,
+          transactionId:     transactionId   ?? null,
+          transactionStatus: "PENDING",
+          method:            method          ?? null,
+          accountNo:         accountNo       ?? null,
+          accountName:       accountName     ?? null,
+          bankName:          bankName        ?? "",
+          bankAccountName:   bankAccountName ?? "",
+          bankBranch:        bankBranch      ?? "",
+          description:       description     ?? null,
+          createdById:       createdById     ?? null,
+          createdByName:     createdByName   ?? null,
+          createdByRole:     (createdByRole as UserRole) ?? null,
+        },
+      });
+
+      return res.status(201).json({ data: created, error: null });
     }
 
-    // Resolve portfolio wallet — prefer explicit param, fall back to the portfolio's own wallet
-    const resolvedPortfolioWalletId = portfolioWalletId ?? userPortfolio.wallet?.id ?? null;
+    // ── REDEMPTION: auto-approved immediately, no admin step needed ────────────
+    if (!userPortfolioId) {
+      return res.status(400).json({ data: null, error: "userPortfolioId is required for REDEMPTION" });
+    }
 
-    const created = await db.withdrawal.create({
-      data: {
-        userId,
-        userPortfolioId,
-        portfolioWalletId: resolvedPortfolioWalletId,
-        masterWalletId:    masterWalletId ?? null,
-        amount:            amt,
-        referenceNo,
-        transactionId:     transactionId ?? null,
-        transactionStatus: "PENDING",
-        method:            method ?? null,
-        accountNo:         accountNo ?? null,
-        accountName:       accountName ?? null,
-        bankName,
-        bankAccountName,
-        bankBranch,
-        description:       description ?? null,
-        createdById:       createdById   ?? null,
-        createdByName:     createdByName ?? null,
-        createdByRole:     (createdByRole as UserRole) ?? null,
+    // Fetch portfolio with live asset positions and latest sub-portfolio generation
+    const up = await db.userPortfolio.findUnique({
+      where:   { id: userPortfolioId },
+      include: {
+        userAssets:    { include: { asset: { select: { id: true, closePrice: true } } } },
+        subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
+        wallet:        { select: { id: true, netAssetValue: true, balance: true } },
       },
     });
+    if (!up) return res.status(404).json({ data: null, error: "Portfolio not found" });
+    if (up.userId !== userId) {
+      return res.status(403).json({ data: null, error: "Portfolio does not belong to this user" });
+    }
+    if (!up.wallet) {
+      return res.status(400).json({ data: null, error: "Portfolio wallet not found" });
+    }
+
+    resolvedPortfolioWalletId = portfolioWalletId ?? up.wallet.id;
+
+    // Available for withdrawal = sum of all asset close values (current market value)
+    const totalCloseValue = up.userAssets.reduce((sum, ua) => sum + ua.closeValue, 0);
+    if (totalCloseValue < amt) {
+      return res.status(400).json({
+        data: null,
+        error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
+      });
+    }
+
+    const newNAV        = totalCloseValue - amt;
+    const totalCostPrice = up.userAssets.reduce((sum, ua) => sum + ua.costPrice, 0);
+    const nextGeneration = (up.subPortfolios[0]?.generation ?? 0) + 1;
+
+    const created = await db.$transaction(async (tx) => {
+      // Create the withdrawal record as immediately APPROVED
+      const withdrawal = await tx.withdrawal.create({
+        data: {
+          userId,
+          userPortfolioId:   userPortfolioId,
+          portfolioWalletId: resolvedPortfolioWalletId,
+          masterWalletId:    resolvedMasterWalletId,
+          withdrawalType:    wType,
+          amount:            amt,
+          referenceNo,
+          transactionId:     transactionId  ?? null,
+          transactionStatus: "APPROVED",
+          approvedAt:        new Date(),
+          method:            method         ?? null,
+          accountNo:         accountNo      ?? null,
+          accountName:       accountName    ?? null,
+          bankName:          "",
+          bankAccountName:   "",
+          bankBranch:        "",
+          description:       description    ?? null,
+          createdById:       createdById    ?? null,
+          createdByName:     createdByName  ?? null,
+          createdByRole:     (createdByRole as UserRole) ?? null,
+        },
+      });
+
+      // Snapshot the current portfolio state as a redemption sub-portfolio (audit trail)
+      const redemptionSub = await tx.subPortfolio.create({
+        data: {
+          userPortfolioId,
+          generation:      nextGeneration,
+          label:           `${up.customName} - Redemption`,
+          amountInvested:  0,
+          totalCostPrice,
+          totalCloseValue,
+          totalLossGain:   totalCloseValue - totalCostPrice,
+          bankFee:         0,
+          transactionFee:  0,
+          feeAtBank:       0,
+          totalFees:       0,
+          cashAtBank:      0,
+          snapshotDate:    new Date(),
+        },
+      });
+
+      if (up.userAssets.length > 0) {
+        await tx.subPortfolioAsset.createMany({
+          data: up.userAssets.map((ua) => ({
+            subPortfolioId:       redemptionSub.id,
+            assetId:              ua.assetId,
+            allocationPercentage: ua.allocationPercentage,
+            costPerShare:         ua.costPerShare,
+            costPrice:            ua.costPrice,
+            stock:                ua.stock,
+            closePrice:           ua.asset.closePrice,
+            closeValue:           ua.closeValue,
+            lossGain:             ua.lossGain,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // Portfolio wallet: funds leave, NAV set to remaining close value
+      await tx.portfolioWallet.update({
+        where: { id: up.wallet!.id },
+        data: {
+          balance:       { decrement: amt },
+          netAssetValue: newNAV,
+        },
+      });
+
+      // Move redeemed funds to master wallet cash balance (no fees)
+      await tx.masterWallet.updateMany({
+        where: { userId },
+        data:  { balance: { increment: amt } },
+      });
+
+      // Recompute all asset positions using remaining close value as new NAV
+      await recomputePortfolioFromNav(tx, userPortfolioId, newNAV);
+
+      // Sync master NAV from all portfolio wallets
+      await syncMasterWalletNav(tx, userId);
+
+      return withdrawal;
+    }, { timeout: 30000, maxWait: 35000 });
 
     return res.status(201).json({ data: created, error: null });
   } catch (error: any) {
@@ -243,12 +422,11 @@ export async function createWithdrawal(req: Request, res: Response) {
       return res.status(409).json({ data: null, error: "Duplicate transactionId" });
     }
     console.error("createWithdrawal error:", error);
-    return res.status(500).json({ data: null, error: "Failed to create withdrawal" });
+    return res.status(500).json({ data: null, error: error?.message ?? "Failed to create withdrawal" });
   }
 }
 
 /* -------------------------------- UPDATE ----------------------------------- */
-/** PATCH /withdrawals/:id — only while PENDING */
 export async function updateWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -266,15 +444,15 @@ export async function updateWithdrawal(req: Request, res: Response) {
       description, transactionStatus,
     } = req.body as Partial<{
       amount: number | string;
-      transactionId?: string | null;
-      method?: string | null;
-      accountNo?: string | null;
-      accountName?: string | null;
-      bankName?: string;
-      bankAccountName?: string;
-      bankBranch?: string;
-      description?: string | null;
-      transactionStatus?: string;
+      transactionId: string | null;
+      method: string | null;
+      accountNo: string | null;
+      accountName: string | null;
+      bankName: string;
+      bankAccountName: string;
+      bankBranch: string;
+      description: string | null;
+      transactionStatus: string;
     }>;
 
     if (transactionStatus && asStatus(transactionStatus) !== "PENDING") {
@@ -289,14 +467,14 @@ export async function updateWithdrawal(req: Request, res: Response) {
       }
       data.amount = a;
     }
-    if (transactionId  !== undefined) data.transactionId  = transactionId;
-    if (method         !== undefined) data.method         = method;
-    if (accountNo      !== undefined) data.accountNo      = accountNo;
-    if (accountName    !== undefined) data.accountName    = accountName;
-    if (bankName       !== undefined) data.bankName       = bankName;
+    if (transactionId   !== undefined) data.transactionId   = transactionId;
+    if (method          !== undefined) data.method          = method;
+    if (accountNo       !== undefined) data.accountNo       = accountNo;
+    if (accountName     !== undefined) data.accountName     = accountName;
+    if (bankName        !== undefined) data.bankName        = bankName;
     if (bankAccountName !== undefined) data.bankAccountName = bankAccountName;
-    if (bankBranch     !== undefined) data.bankBranch     = bankBranch;
-    if (description    !== undefined) data.description    = description;
+    if (bankBranch      !== undefined) data.bankBranch      = bankBranch;
+    if (description     !== undefined) data.description     = description;
 
     const updated = await db.withdrawal.update({ where: { id }, data });
     return res.status(200).json({ data: updated, error: null });
@@ -311,78 +489,18 @@ export async function updateWithdrawal(req: Request, res: Response) {
 
 /* -------------------------------- APPROVE ---------------------------------- */
 /**
- * Recalculate all live UserPortfolioAsset positions for a given portfolio
- * after its wallet NAV changes (deposit or withdrawal).
- * Uses the USER-SPECIFIC allocationPercentage and costPerShare stored on each asset.
- */
-async function recomputePortfolioFromNav(
-  tx: Prisma.TransactionClient,
-  userPortfolioId: string,
-  newNetAssetValue: number
-) {
-  const userPortfolio = await tx.userPortfolio.findUnique({
-    where: { id: userPortfolioId },
-    include: {
-      userAssets: {
-        include: {
-          asset: { select: { id: true, closePrice: true } },
-        },
-      },
-    },
-  });
-
-  if (!userPortfolio) return;
-
-  let totalPortfolioValue = 0;
-  let totalCostPrice      = 0;
-
-  for (const userAsset of userPortfolio.userAssets) {
-    const costPrice  = (userAsset.allocationPercentage / 100) * newNetAssetValue;
-    const stock      = userAsset.costPerShare > 0 ? costPrice / userAsset.costPerShare : 0;
-    const closeValue = userAsset.asset.closePrice * stock;
-    const lossGain   = closeValue - costPrice;
-
-    await tx.userPortfolioAsset.update({
-      where: { id: userAsset.id },
-      data: { costPrice, stock, closeValue, lossGain },
-    });
-
-    totalPortfolioValue += closeValue;
-    totalCostPrice      += costPrice;
-  }
-
-  await tx.userPortfolio.update({
-    where: { id: userPortfolioId },
-    data: {
-      portfolioValue: totalPortfolioValue,
-      totalInvested:  totalCostPrice,
-      totalLossGain:  totalPortfolioValue - totalCostPrice,
-    },
-  });
-}
-
-/**
- * Sync MasterWallet totals by summing all PortfolioWallet NAVs for this user.
- */
-async function syncMasterWallet(tx: Prisma.TransactionClient, userId: string) {
-  const wallets = await tx.portfolioWallet.findMany({
-    where: { userPortfolio: { userId } },
-    select: { netAssetValue: true },
-  });
-
-  const totalNav = wallets.reduce((sum, w) => sum + w.netAssetValue, 0);
-
-  await tx.masterWallet.updateMany({
-    where: { userId },
-    data: { netAssetValue: totalNav },
-  });
-}
-
-/**
  * POST /withdrawals/:id/approve
- * Body: { approvedById, approvedByName, transactionId }
- * PENDING → APPROVED
- * Deducts from PortfolioWallet, recalculates assets, syncs MasterWallet.
+ *
+ * HARD_WITHDRAWAL:
+ *   → verify masterWallet.balance >= amount
+ *   → decrement masterWallet.balance + increment totalWithdrawn
+ *
+ * REDEMPTION:
+ *   → verify portfolioWallet.netAssetValue >= amount
+ *   → decrement portfolioWallet.balance + netAssetValue
+ *   → increment masterWallet.balance (cash returned to master)
+ *   → recompute portfolio asset positions
+ *   → sync master NAV
  */
 export async function approveWithdrawal(req: Request, res: Response) {
   try {
@@ -390,13 +508,12 @@ export async function approveWithdrawal(req: Request, res: Response) {
     const { approvedById, approvedByName, transactionId } =
       (req.body ?? {}) as { approvedById?: string; approvedByName?: string; transactionId?: string };
 
-    if (!transactionId?.trim()) {
-      return res.status(400).json({ data: null, error: "transactionId is required to approve" });
-    }
-
     const existing = await db.withdrawal.findUnique({
-      where: { id },
-      include: { portfolioWallet: { select: { id: true, netAssetValue: true } } },
+      where:   { id },
+      include: {
+        portfolioWallet: { select: { id: true, netAssetValue: true, balance: true } },
+        masterWallet:    { select: { id: true, balance: true } },
+      },
     });
     if (!existing) return res.status(404).json({ data: null, error: "Withdrawal not found" });
 
@@ -406,56 +523,160 @@ export async function approveWithdrawal(req: Request, res: Response) {
     if (existing.transactionStatus === "REJECTED") {
       return res.status(409).json({ data: null, error: "Cannot approve a rejected withdrawal" });
     }
-    if (!existing.portfolioWallet) {
-      return res.status(400).json({ data: null, error: "No portfolio wallet linked to this withdrawal" });
+
+    // transactionId required only for hard withdrawals (not for internal redemptions)
+    if (existing.withdrawalType === "HARD_WITHDRAWAL" && !transactionId?.trim()) {
+      return res.status(400).json({ data: null, error: "transactionId is required for HARD_WITHDRAWAL approval" });
     }
-    if (existing.portfolioWallet.netAssetValue < existing.amount) {
-      return res.status(400).json({ data: null, error: "Insufficient portfolio wallet balance" });
+
+    if (existing.withdrawalType === "HARD_WITHDRAWAL") {
+      const balance = existing.masterWallet?.balance ?? 0;
+      if (balance < existing.amount) {
+        return res.status(400).json({
+          data: null,
+          error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
+        });
+      }
+    } else {
+      // REDEMPTION
+      if (!existing.portfolioWallet) {
+        return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
+      }
+      if (!existing.userPortfolioId) {
+        return res.status(400).json({ data: null, error: "No portfolio linked to this redemption" });
+      }
+    }
+
+    // For REDEMPTION: fetch live asset positions to compute total close value (available for withdrawal)
+    let redemptionData: {
+      userPortfolioWithAssets: Awaited<ReturnType<typeof db.userPortfolio.findUnique>> & {
+        userAssets: Array<{
+          id: string; assetId: string; allocationPercentage: number; costPerShare: number;
+          costPrice: number; stock: number; closeValue: number; lossGain: number;
+          asset: { id: string; closePrice: number };
+        }>;
+        subPortfolios: Array<{ generation: number }>;
+        customName: string;
+      };
+      totalCloseValue: number;
+    } | null = null;
+
+    if (existing.withdrawalType === "REDEMPTION") {
+      const up = await db.userPortfolio.findUnique({
+        where:   { id: existing.userPortfolioId! },
+        include: {
+          userAssets:    { include: { asset: { select: { id: true, closePrice: true } } } },
+          subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
+        },
+      });
+      if (!up) return res.status(404).json({ data: null, error: "Portfolio not found" });
+
+      const totalCloseValue = up.userAssets.reduce((sum, ua) => sum + ua.closeValue, 0);
+
+      if (totalCloseValue < existing.amount) {
+        return res.status(400).json({
+          data: null,
+          error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
+        });
+      }
+
+      redemptionData = { userPortfolioWithAssets: up as any, totalCloseValue };
     }
 
     const approved = await db.$transaction(async (tx) => {
-      // 1. Mark approved
       const updatedWithdrawal = await tx.withdrawal.update({
         where: { id },
         data: {
           transactionStatus: "APPROVED",
-          transactionId:     transactionId.trim(),
+          transactionId:     transactionId?.trim() ?? null,
           approvedById:      approvedById  ?? null,
           approvedByName:    approvedByName ?? null,
           approvedAt:        new Date(),
         },
       });
 
-      // 2. Deduct from PortfolioWallet
-      const updatedWallet = await tx.portfolioWallet.update({
-        where: { id: existing.portfolioWallet!.id },
-        data: {
-          balance:       { decrement: existing.amount },
-          netAssetValue: { decrement: existing.amount },
-          totalFees:     existing.portfolioWallet!.netAssetValue - existing.amount < 0 ? 0 : undefined,
-        },
-        select: { netAssetValue: true },
-      });
+      if (existing.withdrawalType === "HARD_WITHDRAWAL") {
+        // Deduct from master wallet cash balance
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
+          data: {
+            balance:        { decrement: existing.amount },
+            totalWithdrawn: { increment: existing.amount },
+          },
+        });
+      } else {
+        // REDEMPTION: portfolio wallet → master wallet balance
+        //
+        // Available for withdrawal = total close value of assets (not NAV).
+        // New NAV = remaining close value after redemption.
+        // No fees are deducted on redemption.
+        const { userPortfolioWithAssets: up, totalCloseValue } = redemptionData!;
+        const newNAV        = totalCloseValue - existing.amount;
+        const totalCostPrice = up.userAssets.reduce((sum: number, ua: any) => sum + ua.costPrice, 0);
+        const nextGeneration = (up.subPortfolios[0]?.generation ?? 0) + 1;
 
-      // 3. Deduct from MasterWallet totals
-      await tx.masterWallet.updateMany({
-        where: { userId: existing.userId },
-        data: {
-          totalWithdrawn: { increment: existing.amount },
-          netAssetValue:  { decrement: existing.amount },
-        },
-      });
+        // Snapshot the current portfolio state as a redemption sub-portfolio (for audit trail)
+        const redemptionSub = await tx.subPortfolio.create({
+          data: {
+            userPortfolioId: existing.userPortfolioId!,
+            generation:      nextGeneration,
+            label:           `${up.customName} - Redemption`,
+            amountInvested:  0,           // no new money deposited; this is a withdrawal snapshot
+            totalCostPrice,
+            totalCloseValue,
+            totalLossGain:   totalCloseValue - totalCostPrice,
+            bankFee:         0,
+            transactionFee:  0,
+            feeAtBank:       0,
+            totalFees:       0,
+            cashAtBank:      0,
+            snapshotDate:    new Date(),
+          },
+        });
 
-      // 4. Recalculate asset positions from new NAV
-      if (existing.userPortfolioId) {
-        await recomputePortfolioFromNav(tx, existing.userPortfolioId, updatedWallet.netAssetValue);
+        if (up.userAssets.length > 0) {
+          await tx.subPortfolioAsset.createMany({
+            data: up.userAssets.map((ua: any) => ({
+              subPortfolioId:       redemptionSub.id,
+              assetId:              ua.assetId,
+              allocationPercentage: ua.allocationPercentage,
+              costPerShare:         ua.costPerShare,
+              costPrice:            ua.costPrice,
+              stock:                ua.stock,
+              closePrice:           ua.asset.closePrice,
+              closeValue:           ua.closeValue,
+              lossGain:             ua.lossGain,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        // Update portfolio wallet: funds leave, NAV set to remaining close value
+        await tx.portfolioWallet.update({
+          where: { id: existing.portfolioWallet!.id },
+          data: {
+            balance:       { decrement: existing.amount },
+            netAssetValue: newNAV,
+          },
+        });
+
+        // Return redeemed funds to master wallet cash balance (no fees deducted)
+        await tx.masterWallet.updateMany({
+          where: { userId: existing.userId },
+          data:  { balance: { increment: existing.amount } },
+        });
+
+        // Recompute all asset positions using remaining close value as new NAV
+        if (existing.userPortfolioId) {
+          await recomputePortfolioFromNav(tx, existing.userPortfolioId, newNAV);
+        }
+
+        // Sync master NAV from all portfolio wallets
+        await syncMasterWalletNav(tx, existing.userId);
       }
 
-      // 5. Sync master wallet NAV from all portfolio wallets
-      await syncMasterWallet(tx, existing.userId);
-
       return updatedWithdrawal;
-    });
+    }, { timeout: 30000, maxWait: 35000 });
 
     return res.status(200).json({ data: approved, error: null });
   } catch (error: any) {
@@ -468,11 +689,6 @@ export async function approveWithdrawal(req: Request, res: Response) {
 }
 
 /* -------------------------------- REJECT ----------------------------------- */
-/**
- * POST /withdrawals/:id/reject
- * Body: { rejectedById, rejectedByName, reason }
- * PENDING → REJECTED — no balance changes.
- */
 export async function rejectWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -504,7 +720,6 @@ export async function rejectWithdrawal(req: Request, res: Response) {
 }
 
 /* -------------------------------- DELETE ----------------------------------- */
-/** DELETE /withdrawals/:id — only while PENDING */
 export async function deleteWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;

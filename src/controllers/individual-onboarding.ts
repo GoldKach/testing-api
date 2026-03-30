@@ -4,7 +4,7 @@ import { db } from "@/db/db";
 import { BeneficiaryRelation, Prisma } from "@prisma/client";
 
 function getUserId(req: Request): string | undefined {
-  return (req as any)?.user?.id || (req.body?.userId as string) || (req.query?.userId as string);
+  return (req as any)?.user?.userId;
 }
 
 function parseDate(d?: string | null): Date | null {
@@ -289,5 +289,28 @@ export async function validateTin(req: Request, res: Response) {
   } catch (e) {
     console.error("validateTin error:", e);
     return res.status(500).json({ error: "Failed to validate TIN." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/individual/:id/approve
+// Sets isApproved = true on the IndividualOnboarding record.
+// ---------------------------------------------------------------------------
+export async function approveIndividualOnboarding(req: Request, res: Response) {
+  const { id } = req.params;
+  try {
+    const record = await db.individualOnboarding.findUnique({ where: { id }, select: { id: true } });
+    if (!record) return res.status(404).json({ error: "Individual onboarding record not found." });
+
+    const updated = await db.individualOnboarding.update({
+      where: { id },
+      data: { isApproved: true },
+      select: { id: true, userId: true, isApproved: true, updatedAt: true },
+    });
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("approveIndividualOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to approve onboarding." });
   }
 }
