@@ -10,6 +10,7 @@ import {
   cleanupPerformanceReports,
 } from "@/controllers/portfolio-performance-reports";
 import { generateUserPerformanceReports } from "@/controllers/portfolio-performance-report";
+import { generatePortfolioPdfReport } from "@/controllers/portfolio-pdf-report";
 
 const portfolioPerformanceReportsRouter = Router();
 
@@ -51,6 +52,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.delete(
   "/portfolio-performance-reports/cleanup",
   cleanupPerformanceReports
+);
+
+// ── PDF report for a single portfolio ─────────────────────────────
+portfolioPerformanceReportsRouter.get(
+  "/portfolio-performance-reports/pdf/:userPortfolioId",
+  generatePortfolioPdfReport
 );
 
 // ── Dynamic :id route last ─────────────────────────────────────────

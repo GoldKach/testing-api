@@ -2,6 +2,7 @@
 import { Request, Response } from "express";
 import { Prisma, UserRole } from "@prisma/client";
 import { db } from "@/db/db";
+import { regenerateReportForPortfolio } from "@/controllers/portfolio-performance-report";
 
 /* --------------------------------- helpers --------------------------------- */
 
@@ -416,7 +417,15 @@ export async function createWithdrawal(req: Request, res: Response) {
       return withdrawal;
     }, { timeout: 30000, maxWait: 35000 });
 
-    return res.status(201).json({ data: created, error: null });
+    // Respond immediately, then refresh the performance report in the background
+    res.status(201).json({ data: created, error: null });
+
+    // REDEMPTION: regenerate today's report so the reports page reflects the new portfolio state
+    if (wType === "REDEMPTION" && userPortfolioId) {
+      regenerateReportForPortfolio(userPortfolioId).catch((err) =>
+        console.error(`[regenerateReport] createWithdrawal REDEMPTION failed for ${userPortfolioId}:`, err)
+      );
+    }
   } catch (error: any) {
     if (error?.code === "P2002") {
       return res.status(409).json({ data: null, error: "Duplicate transactionId" });
@@ -678,7 +687,15 @@ export async function approveWithdrawal(req: Request, res: Response) {
       return updatedWithdrawal;
     }, { timeout: 30000, maxWait: 35000 });
 
-    return res.status(200).json({ data: approved, error: null });
+    // Respond immediately, then refresh the performance report in the background
+    res.status(200).json({ data: approved, error: null });
+
+    // REDEMPTION: regenerate today's report so the reports page reflects the new portfolio state
+    if (existing.withdrawalType === "REDEMPTION" && existing.userPortfolioId) {
+      regenerateReportForPortfolio(existing.userPortfolioId).catch((err) =>
+        console.error(`[regenerateReport] approveWithdrawal REDEMPTION failed for ${existing.userPortfolioId}:`, err)
+      );
+    }
   } catch (error: any) {
     if (error?.code === "P2002") {
       return res.status(409).json({ data: null, error: "Duplicate transactionId" });

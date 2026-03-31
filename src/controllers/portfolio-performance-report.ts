@@ -235,6 +235,27 @@ async function generateAndSaveReport(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Force-regenerate after a redemption / withdrawal                   */
+/*  Deletes today's stale snapshot then creates a fresh one.           */
+/* ------------------------------------------------------------------ */
+export async function regenerateReportForPortfolio(userPortfolioId: string): Promise<void> {
+  const today    = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+
+  // Remove today's stale report so the generator doesn't skip it
+  await db.userPortfolioPerformanceReport.deleteMany({
+    where: {
+      userPortfolioId,
+      reportDate: { gte: today, lt: tomorrow },
+    },
+  });
+
+  await generateAndSaveReport(userPortfolioId, today);
+  console.log(`[regenerateReport] refreshed report for portfolio ${userPortfolioId}`);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Cron helper — called by the daily job                               */
 /* ------------------------------------------------------------------ */
 export async function generateDailyReportsForAllPortfolios(): Promise<{

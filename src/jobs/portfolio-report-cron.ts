@@ -93,6 +93,11 @@ export function schedule30MinutePortfolioReports() {
 }
 
 export function schedule1MinutePortfolioReports() {
+  console.log("============================================================");
+  console.log("📅 1-MINUTE PORTFOLIO REPORT SCHEDULER INITIALIZED");
+  console.log("⏰ Reports every 1 minute — TESTING ONLY");
+  console.log("⚠️  Switch to scheduleDailyPortfolioReports() for production");
+  console.log("============================================================");
   cron.schedule("* * * * *", async () => {
     await executePortfolioReportJob("1-MINUTE");
   });
@@ -145,7 +150,7 @@ export function startPortfolioReportCronFromEnv() {
     return;
   }
 
-  const mode = (process.env.CRON_MODE || "30-minute").toLowerCase();
+  const mode = (process.env.CRON_MODE || "1-minute").toLowerCase();
 
   switch (mode) {
     case "daily":                   scheduleDailyPortfolioReports();      break;
