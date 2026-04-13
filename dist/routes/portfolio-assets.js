@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const portfolioassets_1 = require("../controllers/portfolioassets");
+const portfolioAssetRouter = (0, express_1.Router)();
+portfolioAssetRouter.post("/portfolioassets", portfolioassets_1.createPortfolioAsset);
+portfolioAssetRouter.get("/portfolioassets", portfolioassets_1.listPortfolioAssets);
+portfolioAssetRouter.get("/portfolioassets/:id", portfolioassets_1.getPortfolioAssetById);
+portfolioAssetRouter.patch("/portfolioassets/:id", portfolioassets_1.updatePortfolioAsset);
+portfolioAssetRouter.delete("/portfolioassets/:id", portfolioassets_1.deletePortfolioAsset);
+portfolioAssetRouter.get("/portfolios/:portfolioId/portfolioassets", portfolioassets_1.listPortfolioAssetsForPortfolio);
+exports.default = portfolioAssetRouter;

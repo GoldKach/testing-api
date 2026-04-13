@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const portfolio_wallets_1 = require("../controllers/portfolio-wallets");
+const portfolioWalletsRouter = (0, express_1.Router)();
+portfolioWalletsRouter.get("/portfolio-wallets", portfolio_wallets_1.listPortfolioWallets);
+portfolioWalletsRouter.get("/portfolio-wallets/portfolio/:userPortfolioId", portfolio_wallets_1.getPortfolioWalletByPortfolio);
+portfolioWalletsRouter.get("/portfolio-wallets/:id", portfolio_wallets_1.getPortfolioWalletById);
+portfolioWalletsRouter.patch("/portfolio-wallets/:id", portfolio_wallets_1.updatePortfolioWallet);
+exports.default = portfolioWalletsRouter;

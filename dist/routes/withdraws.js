@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const withdraws_1 = require("../controllers/withdraws");
+const withdrawalsRouter = (0, express_1.Router)();
+withdrawalsRouter.get("/withdrawals", withdraws_1.listWithdrawals);
+withdrawalsRouter.get("/withdrawals/:id", withdraws_1.getWithdrawalById);
+withdrawalsRouter.post("/withdrawals", withdraws_1.createWithdrawal);
+withdrawalsRouter.patch("/withdrawals/:id", withdraws_1.updateWithdrawal);
+withdrawalsRouter.delete("/withdrawals/:id", withdraws_1.deleteWithdrawal);
+withdrawalsRouter.post("/withdrawals/:id/approve", withdraws_1.approveWithdrawal);
+withdrawalsRouter.post("/withdrawals/:id/reject", withdraws_1.rejectWithdrawal);
+exports.default = withdrawalsRouter;

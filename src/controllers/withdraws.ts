@@ -192,6 +192,7 @@ export async function getWithdrawalById(req: Request, res: Response) {
  *   Internal: portfolio wallet → master wallet balance.
  *   userPortfolioId IS required.
  *   Bank details are NOT required.
+ *   Requires admin approval with manual closing prices.
  */
 export async function createWithdrawal(req: Request, res: Response) {
   try {
@@ -293,18 +294,18 @@ export async function createWithdrawal(req: Request, res: Response) {
       return res.status(201).json({ data: created, error: null });
     }
 
-    // ── REDEMPTION: auto-approved immediately, no admin step needed ────────────
+    // ── REDEMPTION: requires admin approval with manual closing prices ──────────
     if (!userPortfolioId) {
       return res.status(400).json({ data: null, error: "userPortfolioId is required for REDEMPTION" });
     }
 
-    // Fetch portfolio with live asset positions and latest sub-portfolio generation
+    // Fetch portfolio to validate it exists and belongs to user
     const up = await db.userPortfolio.findUnique({
       where:   { id: userPortfolioId },
       include: {
-        userAssets:    { include: { asset: { select: { id: true, closePrice: true } } } },
+        userAssets: { include: { asset: { select: { id: true, closePrice: true } } } },
         subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
-        wallet:        { select: { id: true, netAssetValue: true, balance: true } },
+        wallet: { select: { id: true, netAssetValue: true, balance: true } },
       },
     });
     if (!up) return res.status(404).json({ data: null, error: "Portfolio not found" });
@@ -326,106 +327,32 @@ export async function createWithdrawal(req: Request, res: Response) {
       });
     }
 
-    const newNAV        = totalCloseValue - amt;
-    const totalCostPrice = up.userAssets.reduce((sum, ua) => sum + ua.costPrice, 0);
-    const nextGeneration = (up.subPortfolios[0]?.generation ?? 0) + 1;
+    // Create redemption as PENDING - requires admin approval with manual closing prices
+    const created = await db.withdrawal.create({
+      data: {
+        userId,
+        userPortfolioId:   userPortfolioId,
+        portfolioWalletId: resolvedPortfolioWalletId,
+        masterWalletId:    resolvedMasterWalletId,
+        withdrawalType:    wType,
+        amount:            amt,
+        referenceNo,
+        transactionId:     transactionId  ?? null,
+        transactionStatus: "PENDING",
+        method:            method         ?? null,
+        accountNo:         accountNo      ?? null,
+        accountName:       accountName    ?? null,
+        bankName:          "",
+        bankAccountName:   "",
+        bankBranch:        "",
+        description:       description    ?? null,
+        createdById:       createdById    ?? null,
+        createdByName:     createdByName  ?? null,
+        createdByRole:     (createdByRole as UserRole) ?? null,
+      },
+    });
 
-    const created = await db.$transaction(async (tx) => {
-      // Create the withdrawal record as immediately APPROVED
-      const withdrawal = await tx.withdrawal.create({
-        data: {
-          userId,
-          userPortfolioId:   userPortfolioId,
-          portfolioWalletId: resolvedPortfolioWalletId,
-          masterWalletId:    resolvedMasterWalletId,
-          withdrawalType:    wType,
-          amount:            amt,
-          referenceNo,
-          transactionId:     transactionId  ?? null,
-          transactionStatus: "APPROVED",
-          approvedAt:        new Date(),
-          method:            method         ?? null,
-          accountNo:         accountNo      ?? null,
-          accountName:       accountName    ?? null,
-          bankName:          "",
-          bankAccountName:   "",
-          bankBranch:        "",
-          description:       description    ?? null,
-          createdById:       createdById    ?? null,
-          createdByName:     createdByName  ?? null,
-          createdByRole:     (createdByRole as UserRole) ?? null,
-        },
-      });
-
-      // Snapshot the current portfolio state as a redemption sub-portfolio (audit trail)
-      const redemptionSub = await tx.subPortfolio.create({
-        data: {
-          userPortfolioId,
-          generation:      nextGeneration,
-          label:           `${up.customName} - Redemption`,
-          amountInvested:  0,
-          totalCostPrice,
-          totalCloseValue,
-          totalLossGain:   totalCloseValue - totalCostPrice,
-          bankFee:         0,
-          transactionFee:  0,
-          feeAtBank:       0,
-          totalFees:       0,
-          cashAtBank:      0,
-          snapshotDate:    new Date(),
-        },
-      });
-
-      if (up.userAssets.length > 0) {
-        await tx.subPortfolioAsset.createMany({
-          data: up.userAssets.map((ua) => ({
-            subPortfolioId:       redemptionSub.id,
-            assetId:              ua.assetId,
-            allocationPercentage: ua.allocationPercentage,
-            costPerShare:         ua.costPerShare,
-            costPrice:            ua.costPrice,
-            stock:                ua.stock,
-            closePrice:           ua.asset.closePrice,
-            closeValue:           ua.closeValue,
-            lossGain:             ua.lossGain,
-          })),
-          skipDuplicates: true,
-        });
-      }
-
-      // Portfolio wallet: funds leave, NAV set to remaining close value
-      await tx.portfolioWallet.update({
-        where: { id: up.wallet!.id },
-        data: {
-          balance:       { decrement: amt },
-          netAssetValue: newNAV,
-        },
-      });
-
-      // Move redeemed funds to master wallet cash balance (no fees)
-      await tx.masterWallet.updateMany({
-        where: { userId },
-        data:  { balance: { increment: amt } },
-      });
-
-      // Recompute all asset positions using remaining close value as new NAV
-      await recomputePortfolioFromNav(tx, userPortfolioId, newNAV);
-
-      // Sync master NAV from all portfolio wallets
-      await syncMasterWalletNav(tx, userId);
-
-      return withdrawal;
-    }, { timeout: 30000, maxWait: 35000 });
-
-    // Respond immediately, then refresh the performance report in the background
-    res.status(201).json({ data: created, error: null });
-
-    // REDEMPTION: regenerate today's report so the reports page reflects the new portfolio state
-    if (wType === "REDEMPTION" && userPortfolioId) {
-      regenerateReportForPortfolio(userPortfolioId).catch((err) =>
-        console.error(`[regenerateReport] createWithdrawal REDEMPTION failed for ${userPortfolioId}:`, err)
-      );
-    }
+    return res.status(201).json({ data: created, error: null });
   } catch (error: any) {
     if (error?.code === "P2002") {
       return res.status(409).json({ data: null, error: "Duplicate transactionId" });
@@ -505,17 +432,29 @@ export async function updateWithdrawal(req: Request, res: Response) {
  *   → decrement masterWallet.balance + increment totalWithdrawn
  *
  * REDEMPTION:
- *   → verify portfolioWallet.netAssetValue >= amount
+ *   → requires manual closing prices from admin
  *   → decrement portfolioWallet.balance + netAssetValue
  *   → increment masterWallet.balance (cash returned to master)
  *   → recompute portfolio asset positions
  *   → sync master NAV
+ *   → date-based processing (uses approvedAt date for snapshot)
  */
 export async function approveWithdrawal(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { approvedById, approvedByName, transactionId } =
-      (req.body ?? {}) as { approvedById?: string; approvedByName?: string; transactionId?: string };
+    const { 
+      approvedById, 
+      approvedByName, 
+      transactionId,
+      assetPrices,
+      approvedAt
+    } = (req.body ?? {}) as { 
+      approvedById?: string; 
+      approvedByName?: string; 
+      transactionId?: string;
+      assetPrices?: Record<string, number> | null;
+      approvedAt?: string;
+    };
 
     const existing = await db.withdrawal.findUnique({
       where:   { id },
@@ -533,9 +472,25 @@ export async function approveWithdrawal(req: Request, res: Response) {
       return res.status(409).json({ data: null, error: "Cannot approve a rejected withdrawal" });
     }
 
-    // transactionId required only for hard withdrawals (not for internal redemptions)
+    // transactionId required only for hard withdrawals
     if (existing.withdrawalType === "HARD_WITHDRAWAL" && !transactionId?.trim()) {
       return res.status(400).json({ data: null, error: "transactionId is required for HARD_WITHDRAWAL approval" });
+    }
+
+    // For REDEMPTION: require manual closing prices from admin
+    if (existing.withdrawalType === "REDEMPTION") {
+      if (!existing.portfolioWallet) {
+        return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
+      }
+      if (!existing.userPortfolioId) {
+        return res.status(400).json({ data: null, error: "No portfolio linked to this redemption" });
+      }
+      if (!assetPrices || Object.keys(assetPrices).length === 0) {
+        return res.status(400).json({ 
+          data: null, 
+          error: "assetPrices is required for REDEMPTION approval. Provide closing prices for each asset." 
+        });
+      }
     }
 
     if (existing.withdrawalType === "HARD_WITHDRAWAL") {
@@ -546,17 +501,9 @@ export async function approveWithdrawal(req: Request, res: Response) {
           error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
         });
       }
-    } else {
-      // REDEMPTION
-      if (!existing.portfolioWallet) {
-        return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
-      }
-      if (!existing.userPortfolioId) {
-        return res.status(400).json({ data: null, error: "No portfolio linked to this redemption" });
-      }
     }
 
-    // For REDEMPTION: fetch live asset positions to compute total close value (available for withdrawal)
+    // For REDEMPTION: fetch live asset positions and validate manual closing prices
     let redemptionData: {
       userPortfolioWithAssets: Awaited<ReturnType<typeof db.userPortfolio.findUnique>> & {
         userAssets: Array<{
@@ -568,6 +515,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
         customName: string;
       };
       totalCloseValue: number;
+      manualClosePriceByAsset: Map<string, number>;
     } | null = null;
 
     if (existing.withdrawalType === "REDEMPTION") {
@@ -580,17 +528,41 @@ export async function approveWithdrawal(req: Request, res: Response) {
       });
       if (!up) return res.status(404).json({ data: null, error: "Portfolio not found" });
 
-      const totalCloseValue = up.userAssets.reduce((sum, ua) => sum + ua.closeValue, 0);
+      // Build map of manual closing prices
+      const manualClosePriceByAsset = new Map<string, number>();
+      let totalCloseValue = 0;
+      
+      for (const ua of up.userAssets) {
+        const manualPrice = assetPrices?.[ua.assetId];
+        if (manualPrice === undefined || manualPrice <= 0) {
+          return res.status(400).json({
+            data: null,
+            error: `Invalid or missing closing price for asset ${ua.assetId}. Admin must provide all asset prices.`,
+          });
+        }
+        manualClosePriceByAsset.set(ua.assetId, manualPrice);
+        // Calculate close value using manual price instead of current market price
+        totalCloseValue += ua.stock * manualPrice;
+        
+        // Update the asset's close price in the database
+        await db.asset.update({
+          where: { id: ua.assetId },
+          data: { closePrice: manualPrice },
+        });
+      }
 
       if (totalCloseValue < existing.amount) {
         return res.status(400).json({
           data: null,
-          error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
+          error: `Insufficient portfolio close value at provided prices. Available: ${totalCloseValue.toFixed(2)}`,
         });
       }
 
-      redemptionData = { userPortfolioWithAssets: up as any, totalCloseValue };
+      redemptionData = { userPortfolioWithAssets: up as any, totalCloseValue, manualClosePriceByAsset };
     }
+
+    // Parse approval date (date-based processing)
+    const approvalDate = approvedAt ? new Date(approvedAt) : new Date();
 
     const approved = await db.$transaction(async (tx) => {
       const updatedWithdrawal = await tx.withdrawal.update({
@@ -600,7 +572,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
           transactionId:     transactionId?.trim() ?? null,
           approvedById:      approvedById  ?? null,
           approvedByName:    approvedByName ?? null,
-          approvedAt:        new Date(),
+          approvedAt:        approvalDate,
         },
       });
 
@@ -615,14 +587,11 @@ export async function approveWithdrawal(req: Request, res: Response) {
         });
       } else {
         // REDEMPTION: portfolio wallet → master wallet balance
-        //
-        // Available for withdrawal = total close value of assets (not NAV).
-        // New NAV = remaining close value after redemption.
-        // No fees are deducted on redemption.
-        const { userPortfolioWithAssets: up, totalCloseValue } = redemptionData!;
-        const newNAV        = totalCloseValue - existing.amount;
-        const totalCostPrice = up.userAssets.reduce((sum: number, ua: any) => sum + ua.costPrice, 0);
-        const nextGeneration = (up.subPortfolios[0]?.generation ?? 0) + 1;
+        // Uses manual closing prices provided by admin
+        const { userPortfolioWithAssets: up, totalCloseValue, manualClosePriceByAsset } = redemptionData!;
+        const newNAV         = totalCloseValue - existing.amount;
+        const totalCostPrice  = up.userAssets.reduce((sum: number, ua: any) => sum + ua.costPrice, 0);
+        const nextGeneration  = (up.subPortfolios[0]?.generation ?? 0) + 1;
 
         // Snapshot the current portfolio state as a redemption sub-portfolio (for audit trail)
         const redemptionSub = await tx.subPortfolio.create({
@@ -630,7 +599,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
             userPortfolioId: existing.userPortfolioId!,
             generation:      nextGeneration,
             label:           `${up.customName} - Redemption`,
-            amountInvested:  0,           // no new money deposited; this is a withdrawal snapshot
+            amountInvested:  0,
             totalCostPrice,
             totalCloseValue,
             totalLossGain:   totalCloseValue - totalCostPrice,
@@ -639,7 +608,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
             feeAtBank:       0,
             totalFees:       0,
             cashAtBank:      0,
-            snapshotDate:    new Date(),
+            snapshotDate:    approvalDate,
           },
         });
 
@@ -652,9 +621,9 @@ export async function approveWithdrawal(req: Request, res: Response) {
               costPerShare:         ua.costPerShare,
               costPrice:            ua.costPrice,
               stock:                ua.stock,
-              closePrice:           ua.asset.closePrice,
-              closeValue:           ua.closeValue,
-              lossGain:             ua.lossGain,
+              closePrice:           manualClosePriceByAsset.get(ua.assetId) ?? ua.asset.closePrice,
+              closeValue:           ua.stock * (manualClosePriceByAsset.get(ua.assetId) ?? ua.asset.closePrice),
+              lossGain:             (ua.stock * (manualClosePriceByAsset.get(ua.assetId) ?? ua.asset.closePrice)) - ua.costPrice,
             })),
             skipDuplicates: true,
           });
@@ -669,7 +638,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
           },
         });
 
-        // Return redeemed funds to master wallet cash balance (no fees deducted)
+        // Return redeemed funds to master wallet cash balance
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data:  { balance: { increment: existing.amount } },

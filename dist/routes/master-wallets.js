@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const master_wallets_1 = require("../controllers/master-wallets");
+const masterWalletsRouter = (0, express_1.Router)();
+masterWalletsRouter.get("/master-wallets", master_wallets_1.listMasterWallets);
+masterWalletsRouter.get("/master-wallets/user/:userId", master_wallets_1.getMasterWalletByUser);
+masterWalletsRouter.get("/master-wallets/:id", master_wallets_1.getMasterWalletById);
+masterWalletsRouter.patch("/master-wallets/:id", master_wallets_1.updateMasterWallet);
+masterWalletsRouter.post("/master-wallets/sync/:userId", master_wallets_1.syncMasterWalletForUser);
+exports.default = masterWalletsRouter;

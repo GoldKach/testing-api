@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const assets_1 = require("../controllers/assets");
+const assetsRouter = (0, express_1.Router)();
+assetsRouter.get("/assets", assets_1.listAssets);
+assetsRouter.get("/assets/:id", assets_1.getAssetById);
+assetsRouter.get("/assets/symbol/:symbol", assets_1.getAssetBySymbol);
+assetsRouter.post("/assets", assets_1.createAsset);
+assetsRouter.patch("/assets/:id", assets_1.updateAsset);
+assetsRouter.delete("/assets/:id", assets_1.deleteAsset);
+exports.default = assetsRouter;

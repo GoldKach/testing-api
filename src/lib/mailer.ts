@@ -8,6 +8,7 @@ import ResetPasswordEmail from "@/emails/reset-password-email";
 import VerificationCodeEmail from "@/emails/VerificationCodeEmail";
 import AccountVerifiedEmail from "@/emails/AccountVerifiedEmail";
 import OnboardingSubmittedEmail from "@/emails/OnboardingSubmittedEmail";
+import AccountDeactivatedEmail from "@/emails/AccountDeactivatedEmail";
 
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
@@ -118,5 +119,19 @@ export async function sendAccountVerifiedEmail(args: {
     subject: "Your GoldKach email has been verified — next steps",
     react: React.createElement(AccountVerifiedEmail, { name }),
     tags: [{ name: "category", value: "account-verified" }],
+  });
+}
+
+export async function sendAccountDeactivatedEmail(args: {
+  to: string;
+  name?: string;
+  daysInactive?: number;
+}) {
+  const { to, name = "there", daysInactive = 7 } = args;
+  return sendEmail({
+    to,
+    subject: "Your GoldKach Account Has Been Deactivated",
+    react: React.createElement(AccountDeactivatedEmail, { name, daysInactive }),
+    tags: [{ name: "category", value: "account-deactivated" }],
   });
 }

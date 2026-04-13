@@ -276,11 +276,8 @@ export async function createUser(req: Request, res: Response) {
     const hashedPassword   = await bcrypt.hash(password, 12);
     const verificationCode = makeSixDigitToken();
 
-    // MasterWallet fee defaults
-    const bankFee        = 30;
-    const transactionFee = 10;
-    const feeAtBank      = 10;
-    const totalFees      = bankFee + transactionFee + feeAtBank;
+    // MasterWallet — no pre-set fees; fees are recorded at first deposit approval
+    const totalFees = 0;
 
     let newUser: {
       id: string;

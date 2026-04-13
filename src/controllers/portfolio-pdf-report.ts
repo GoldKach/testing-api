@@ -271,6 +271,13 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
     }
 
     const { user, portfolio, wallet, userAssets } = userPortfolio;
+
+    // Fetch first deposit fees (bankCost, transactionCost, cashAtBank)
+    const firstDeposit = await db.deposit.findFirst({
+      where: { userId: userPortfolio.userId, depositTarget: "MASTER", isFirstDeposit: true },
+      select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
+      orderBy: { createdAt: "asc" },
+    });
     const reportDate      = new Date();
     const reportingPeriod = getQuarter(reportDate);
 
@@ -298,10 +305,10 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
 
     const returnPct = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
 
-    const bankFee       = Number(wallet?.bankFee       ?? 30);
-    const transactionFee = Number(wallet?.transactionFee ?? 10);
-    const feeAtBank     = Number(wallet?.feeAtBank     ?? 10);
-    const totalFees     = Number(wallet?.totalFees     ?? 50);
+    const bankFee       = Number(firstDeposit?.bankCost        ?? wallet?.bankFee       ?? 0);
+    const transactionFee = Number(firstDeposit?.transactionCost ?? wallet?.transactionFee ?? 0);
+    const feeAtBank     = Number(firstDeposit?.cashAtBank       ?? wallet?.feeAtBank     ?? 0);
+    const totalFees     = Number(firstDeposit?.totalFees        ?? wallet?.totalFees     ?? 0);
     const grandTotal    = totalCloseValue + feeAtBank; // close value + uninvested cash
 
     /* ── 3. Build PDF ───────────────────────────────────────────── */

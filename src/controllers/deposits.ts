@@ -44,7 +44,10 @@ const DEPOSIT_INCLUDE: Prisma.DepositInclude = {
 /*  Top-up logic (ALLOCATION: master wallet → portfolio wallet)        */
 /*                                                                      */
 /*  Creates SubPortfolio (X1), merges into X2 live positions,          */
-/*  creates TopupEvent audit record.                                    */
+/*  creates TopupEvent audit record.                                  */
+/*                                                                      */
+/*  NOTE: Fees are no longer deducted during allocation.              */
+/*  All fees (maintenance, management) are deducted from master wallet.*/
 /* ------------------------------------------------------------------ */
 
 async function applyTopup(
@@ -70,14 +73,14 @@ async function applyTopup(
   const nextGeneration   = (up.subPortfolios[0]?.generation ?? 0) + 1;
   const newTotalInvested = prevTotal + topupAmount;
 
-  // Fee rates configured on this portfolio's wallet (same rates applied per topup)
-  const bankFee        = up.wallet.bankFee;
-  const transactionFee = up.wallet.transactionFee;
-  const feeAtBank      = up.wallet.feeAtBank;
-  const totalFees      = bankFee + transactionFee + feeAtBank;
+  // Fees are now 0 during allocation - all fees deducted from master wallet
+  const bankFee        = 0;
+  const transactionFee = 0;
+  const feeAtBank     = 0;
+  const totalFees      = 0;
 
-  // Sub-portfolio NAV = topup amount minus this topup's deductions
-  const topupNAV = topupAmount - totalFees;
+  // Sub-portfolio NAV = full topup amount (no fees deducted)
+  const topupNAV = topupAmount;
 
   // ─── 1. Sub-portfolio (X1) ─────────────────────────────────────────────────
   // allocation% adopted from mother; costPerShare + closePrice entered by staff at approval;
@@ -143,8 +146,7 @@ async function applyTopup(
 
   // ─── New mother portfolio (X2 merge) ──────────────────────────────────────
   // totalInvested  = prevTotal + topupAmount
-  // cumulativeFees = prevTotalFees + this topup's fees  (bankFee + transFee + feeAtBank)
-  // NAV            = totalInvested − cumulativeFees
+  // NAV            = totalInvested (no fees during allocation)
   //
   // For each asset:
   //   stock        = motherStock + topupStock          ← accumulated
@@ -154,8 +156,7 @@ async function applyTopup(
   //   costPerShare = costPrice / stock                ← recalculated
   //   closeValue   = closePrice × stock
   //   lossGain     = closeValue − costPrice
-  const newTotalFees     = up.wallet.totalFees + totalFees;
-  const newNetAssetValue = newTotalInvested - newTotalFees;
+  const newNetAssetValue = newTotalInvested;
 
   // Build lookup: assetId → approval-time closePrice (from sub-portfolio rows)
   const closePriceByAsset = new Map<string, number>(
@@ -197,13 +198,13 @@ async function applyTopup(
     },
   });
 
-  // 4. Update PortfolioWallet — increment balance and update fees/NAV
+  // 4. Update PortfolioWallet — increment balance and NAV (no fees)
   await tx.portfolioWallet.update({
     where: { id: up.wallet.id },
     data: {
       balance:       { increment: topupAmount },
-      totalFees:     newTotalFees,
-      netAssetValue: newNetAssetValue,           // totalInvested − cumulativeFees
+      totalFees:     0,
+      netAssetValue: newNetAssetValue,
     },
   });
 
@@ -215,10 +216,10 @@ async function applyTopup(
       topupAmount,
       previousTotal:       prevTotal,
       newTotalInvested,
-      newTotalCloseValue,                           // market value kept for performance reporting
+      newTotalCloseValue,
       newTotalLossGain:    newTotalCloseValue - newTotalInvested,
-      newTotalFees,
-      newNetAssetValue,                             // costPrice − cumulativeFees
+      newTotalFees:       0,
+      newNetAssetValue,
       status:              "MERGED",
       mergedAt:            new Date(),
       mergedSubPortfolios: { connect: { id: sub.id } },
@@ -341,6 +342,7 @@ export async function createDeposit(req: Request, res: Response) {
       accountNo, method, description,
       createdById, createdByName, createdByRole,
       proofUrl, proofFileName,
+      bankCost, transactionCost, cashAtBank,
     } = req.body as Partial<{
       userId: string; userPortfolioId: string;
       amount: number | string; depositTarget: string;
@@ -348,6 +350,7 @@ export async function createDeposit(req: Request, res: Response) {
       accountNo: string; method: string; description: string;
       createdById: string; createdByName: string; createdByRole: string;
       proofUrl: string; proofFileName: string;
+      bankCost: number | string; transactionCost: number | string; cashAtBank: number | string;
     }>;
 
     const target = (depositTarget === "ALLOCATION" ? "ALLOCATION" : "MASTER") as "MASTER" | "ALLOCATION";
@@ -378,7 +381,6 @@ export async function createDeposit(req: Request, res: Response) {
     let masterWalletId: string | null    = user.masterWallet?.id ?? null;
 
     if (target === "ALLOCATION") {
-      // Verify portfolio exists and belongs to user
       const up = await db.userPortfolio.findUnique({
         where:  { id: userPortfolioId! },
         select: { id: true, userId: true, wallet: { select: { id: true } } },
@@ -389,7 +391,6 @@ export async function createDeposit(req: Request, res: Response) {
       }
       portfolioWalletId = up.wallet?.id ?? null;
 
-      // Verify sufficient master wallet balance
       const balance = user.masterWallet?.balance ?? 0;
       if (balance < amt) {
         return res.status(400).json({
@@ -398,6 +399,31 @@ export async function createDeposit(req: Request, res: Response) {
         });
       }
     }
+
+    // Detect if this is the first MASTER deposit for this user
+    let isFirstDeposit = false;
+    if (target === "MASTER") {
+      const priorDeposit = await db.deposit.findFirst({
+        where: { userId, depositTarget: "MASTER" },
+        select: { id: true },
+      });
+      isFirstDeposit = !priorDeposit;
+    }
+
+    // Auto-generate referenceNo from master wallet account number + timestamp
+    const masterWallet = await db.masterWallet.findUnique({
+      where:  { userId },
+      select: { accountNumber: true },
+    });
+    const autoRefNo = masterWallet?.accountNumber
+      ? `${masterWallet.accountNumber}-${Date.now()}`
+      : referenceNo ?? `DEP-${Date.now()}`;
+
+    // Parse fee fields (only meaningful on first MASTER deposit)
+    const fBankCost        = isFirstDeposit ? num(bankCost, 0) : 0;
+    const fTransactionCost = isFirstDeposit ? num(transactionCost, 0) : 0;
+    const fCashAtBank      = isFirstDeposit ? num(cashAtBank, 0) : 0;
+    const fTotalFees       = fBankCost + fTransactionCost + fCashAtBank;
 
     const created = await db.deposit.create({
       data: {
@@ -410,7 +436,7 @@ export async function createDeposit(req: Request, res: Response) {
         transactionStatus: Status.PENDING,
         transactionId:     transactionId  ?? null,
         mobileNo:          mobileNo       ?? null,
-        referenceNo:       referenceNo    ?? null,
+        referenceNo:       autoRefNo,
         accountNo:         accountNo      ?? null,
         method:            method         ?? null,
         description:       description    ?? null,
@@ -419,6 +445,11 @@ export async function createDeposit(req: Request, res: Response) {
         createdById:       createdById    ?? null,
         createdByName:     createdByName  ?? null,
         createdByRole:     (createdByRole as UserRole) ?? null,
+        bankCost:          fBankCost,
+        transactionCost:   fTransactionCost,
+        cashAtBank:        fCashAtBank,
+        totalFees:         fTotalFees,
+        isFirstDeposit,
       },
       include: DEPOSIT_INCLUDE,
     });
@@ -549,11 +580,16 @@ export async function approveDeposit(req: Request, res: Response) {
 
       if (existing.depositTarget === "MASTER") {
         // External deposit → land in master wallet cash balance
+        // On first deposit: deduct one-time fees from the credited amount
+        const netAmount = existing.amount - (existing.totalFees ?? 0);
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data: {
-            balance:        { increment: existing.amount },
+            balance:        { increment: netAmount > 0 ? netAmount : existing.amount },
             totalDeposited: { increment: existing.amount },
+            ...(existing.isFirstDeposit && existing.totalFees > 0
+              ? { totalFees: existing.totalFees }
+              : {}),
           },
         });
       } else {

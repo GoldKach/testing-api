@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const portfolio_performance_reports_1 = require("../controllers/portfolio-performance-reports");
+const portfolioPerformanceReportsRouter = (0, express_1.Router)();
+portfolioPerformanceReportsRouter.get("/portfolio-performance-reports", portfolio_performance_reports_1.listPerformanceReports);
+portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/latest/:userPortfolioId", portfolio_performance_reports_1.getLatestPerformanceReport);
+portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/stats/:userPortfolioId", portfolio_performance_reports_1.getPerformanceStatistics);
+portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate", portfolio_performance_reports_1.generatePerformanceReport);
+portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate-all", portfolio_performance_reports_1.generateAllPerformanceReports);
+portfolioPerformanceReportsRouter.delete("/portfolio-performance-reports/cleanup", portfolio_performance_reports_1.cleanupPerformanceReports);
+portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/:id", portfolio_performance_reports_1.getPerformanceReportById);
+exports.default = portfolioPerformanceReportsRouter;

@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const user_settings_1 = require("../controllers/user-settings");
+const userSettingsRouter = (0, express_1.Router)();
+userSettingsRouter.get("/users/settings", user_settings_1.getUserSettings);
+userSettingsRouter.patch("/users/settings/profile", user_settings_1.updateProfile);
+userSettingsRouter.patch("/users/settings/email", user_settings_1.updateEmail);
+userSettingsRouter.patch("/users/settings/phone", user_settings_1.updatePhone);
+userSettingsRouter.patch("/users/settings/password", user_settings_1.updatePassword);
+userSettingsRouter.patch("/users/settings/image", user_settings_1.updateProfileImage);
+userSettingsRouter.delete("/users/settings/account", user_settings_1.deleteAccount);
+exports.default = userSettingsRouter;

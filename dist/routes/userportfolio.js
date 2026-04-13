@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const userportfolios_1 = require("../controllers/userportfolios");
+const express_1 = require("express");
+const userPortfolioRouter = (0, express_1.Router)();
+userPortfolioRouter.get("/user-portfolios", userportfolios_1.listUserPortfolios);
+userPortfolioRouter.get("/user-portfolios/:id", userportfolios_1.getUserPortfolioById);
+userPortfolioRouter.post("/user-portfolios", userportfolios_1.createUserPortfolio);
+userPortfolioRouter.patch("/user-portfolios/:id", userportfolios_1.updateUserPortfolio);
+userPortfolioRouter.post("/user-portfolios/:id/recompute", userportfolios_1.recomputeUserPortfolio);
+userPortfolioRouter.delete("/user-portfolios/:id", userportfolios_1.deleteUserPortfolio);
+exports.default = userPortfolioRouter;

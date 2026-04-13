@@ -311,6 +311,14 @@ model MasterWallet {
   totalFees      Float @default(0.0) // sum of all fees across portfolios
   netAssetValue  Float @default(0.0) // sum of NAV across all portfolio wallets
 
+  // Maintenance and management fees
+  maintenanceFee Float @default(2.0) // $2 per client per period
+  managementFee Float @default(0.0) // calculated based on NAV (0.5% quarterly, 2% annually)
+
+  // Last fee deduction tracking
+  lastMaintenanceFeeDate DateTime?
+  lastManagementFeeDate  DateTime?
+
   status    AccountStatus @default(ACTIVE)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
@@ -327,11 +335,11 @@ model PortfolioWallet {
   userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
 
   balance        Float @default(0.0) // cash balance in this portfolio wallet
-  bankFee        Float @default(30)
-  transactionFee Float @default(10)
-  feeAtBank      Float @default(10)
-  totalFees      Float @default(50.0)
-  netAssetValue  Float @default(0.0) // total close value of assets + cash balance - fees
+  bankFee        Float @default(0.0) // fees now deducted from master wallet
+  transactionFee Float @default(0.0) // fees now deducted from master wallet
+  feeAtBank      Float @default(0.0) // fees now deducted from master wallet
+  totalFees      Float @default(0.0) // fees now deducted from master wallet
+  netAssetValue  Float @default(0.0) // total close value of assets + cash balance
 
   status    AccountStatus @default(ACTIVE)
   createdAt DateTime      @default(now())
@@ -392,6 +400,13 @@ model Deposit {
   description       String?
   proofUrl          String?
   proofFileName     String?
+
+  // One-time fees deducted on the FIRST deposit to master wallet
+  bankCost        Float @default(0.0)  // e.g. $30 bank processing fee
+  transactionCost Float @default(0.0)  // e.g. $10 transaction fee
+  cashAtBank      Float @default(0.0)  // e.g. $10 cash held at bank
+  totalFees       Float @default(0.0)  // bankCost + transactionCost + cashAtBank
+  isFirstDeposit  Boolean @default(false) // true if this is the client's first MASTER deposit
 
   // If this deposit triggered a top-up, link to the TopupEvent
   topupEvent TopupEvent?

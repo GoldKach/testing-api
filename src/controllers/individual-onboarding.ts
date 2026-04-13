@@ -130,9 +130,19 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
     }
 
     // --- Upsert IndividualOnboarding ---
+    // Validate agentId — null it out if it doesn't exist in StaffProfile
+    let resolvedAgentId: string | null = payload.agentId ?? null;
+    if (resolvedAgentId) {
+      const agentExists = await db.staffProfile.findUnique({
+        where: { id: resolvedAgentId },
+        select: { id: true },
+      });
+      if (!agentExists) resolvedAgentId = null;
+    }
+
     const onboardingData: Prisma.IndividualOnboardingUncheckedCreateInput = {
       userId,
-      agentId: payload.agentId ?? null,
+      agentId: resolvedAgentId,
 
       fullName: String(payload.fullName),
       dateOfBirth: parseDate(payload.dateOfBirth) ?? undefined,

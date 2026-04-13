@@ -86,7 +86,7 @@ const DEFAULT_INCLUDE: Prisma.UserPortfolioInclude = {
       masterWallet: {
         select: {
           id: true, accountNumber: true,
-          netAssetValue: true, status: true,
+          balance: true, netAssetValue: true, status: true,
         },
       },
     },
@@ -244,10 +244,11 @@ export async function createUserPortfolio(req: Request, res: Response) {
     // amountInvested is optional — portfolio can be created with 0 and funded later via ALLOCATION
     const investedAmt = toNumber(amountInvested, 0);
 
-    // Fee rates: use provided values, fall back to defaults
-    const bankFee        = toNumber(bankFeeInput,        30);
-    const transactionFee = toNumber(transactionFeeInput, 10);
-    const feeAtBank      = toNumber(feeAtBankInput,      10);
+    // Fee rates: now 0 - fees are deducted from master wallet, not during allocation
+    const bankFee        = 0;
+    const transactionFee = 0;
+    const feeAtBank      = 0;
+    const totalFees      = 0;
 
     // Validate each allocation entry
     for (const a of assetAllocations) {
@@ -264,7 +265,7 @@ export async function createUserPortfolio(req: Request, res: Response) {
 
     // Existence checks
     const [user, portfolio] = await Promise.all([
-      db.user.findUnique({ where: { id: userId }, select: { id: true, masterWallet: { select: { id: true } } } }),
+      db.user.findUnique({ where: { id: userId }, select: { id: true, masterWallet: { select: { id: true, balance: true } } } }),
       db.portfolio.findUnique({ where: { id: portfolioId } }),
     ]);
 
@@ -273,6 +274,17 @@ export async function createUserPortfolio(req: Request, res: Response) {
       return res.status(400).json({ data: null, error: "User master wallet not found." });
     }
     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found." });
+
+    // Check sufficient master wallet balance
+    if (investedAmt > 0) {
+      const balance = user.masterWallet.balance ?? 0;
+      if (balance < investedAmt) {
+        return res.status(400).json({
+          data: null,
+          error: `Insufficient master wallet balance. Available: $${balance.toFixed(2)}, Required: $${investedAmt.toFixed(2)}`,
+        });
+      }
+    }
 
     // Check name uniqueness for this user+portfolio combination
     const nameConflict = await db.userPortfolio.findFirst({
@@ -300,9 +312,8 @@ export async function createUserPortfolio(req: Request, res: Response) {
       }
     }
 
-    // NAV = totalInvested − totalFees; costPrice = allocationPercentage × NAV
-    const totalFees  = bankFee + transactionFee + feeAtBank;
-    const navAmt     = investedAmt - totalFees;
+    // NAV = totalInvested (fees are now deducted from master wallet, not during allocation)
+    const navAmt     = investedAmt;
 
     const rows = assetAllocations.map((a) => {
       const closePrice = toNumber(assetMap.get(a.assetId)!.closePrice, 0);
@@ -331,17 +342,17 @@ export async function createUserPortfolio(req: Request, res: Response) {
         },
       });
 
-      // 2. Create dedicated PortfolioWallet
+      // 2. Create dedicated PortfolioWallet (no fees - deducted from master wallet)
       const accountNumber = `GKP${Date.now().toString().slice(-7)}`;
       await tx.portfolioWallet.create({
         data: {
           accountNumber,
           userPortfolioId: up.id,
           balance:         investedAmt,
-          bankFee,
-          transactionFee,
-          feeAtBank,
-          totalFees,
+          bankFee:         0,
+          transactionFee:  0,
+          feeAtBank:       0,
+          totalFees:       0,
           netAssetValue:   navAmt,
           status:          "ACTIVE",
         },
@@ -357,10 +368,10 @@ export async function createUserPortfolio(req: Request, res: Response) {
           totalCostPrice:  rows.reduce((s, r) => s + r.costPrice, 0),
           totalCloseValue,
           totalLossGain:   totalCloseValue - investedAmt,
-          bankFee,
-          transactionFee,
-          feeAtBank,
-          totalFees,
+          bankFee:         0,
+          transactionFee:  0,
+          feeAtBank:       0,
+          totalFees:       0,
           cashAtBank,
           snapshotDate:    new Date(),
         },
@@ -397,11 +408,14 @@ export async function createUserPortfolio(req: Request, res: Response) {
         skipDuplicates: true,
       });
 
-      // 6. Sync MasterWallet NAV (balance stays unchanged — allocation is managed via deposit ALLOCATION flow)
+      // 6. Deduct from MasterWallet balance and update NAV
       if (investedAmt > 0) {
         await tx.masterWallet.update({
           where: { userId },
-          data:  { netAssetValue: { increment: totalCloseValue } },
+          data:  {
+            balance:       { decrement: investedAmt },
+            netAssetValue: { increment: totalCloseValue },
+          },
         });
       }
 

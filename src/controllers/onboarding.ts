@@ -71,6 +71,16 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
 
     const payload = req.body as any;
 
+    // Validate agentId — null it out if it doesn't exist in StaffProfile
+    let resolvedAgentId: string | null = payload.agentId ?? null;
+    if (resolvedAgentId) {
+      const agentExists = await db.staffProfile.findUnique({
+        where: { id: resolvedAgentId },
+        select: { id: true },
+      });
+      if (!agentExists) resolvedAgentId = null;
+    }
+
     // Required fields
     const missing = requireFields(payload, [
       "fullName",
@@ -160,7 +170,7 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
     // Upsert in a transaction
     const onboardingData: Prisma.IndividualOnboardingUncheckedCreateInput = {
       userId,
-      agentId: payload.agentId ?? null,
+      agentId: resolvedAgentId,
       fullName: String(payload.fullName),
       dateOfBirth: parseDate(payload.dateOfBirth) ?? undefined,
       tin: payload.tin ? String(payload.tin).trim() : null,
@@ -248,9 +258,15 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
     });
 
     return res.status(200).json({ ok: true, data: saved });
-  } catch (e) {
+  } catch (e: any) {
     console.error("submitIndividualOnboarding error:", e);
-    return res.status(500).json({ error: "Failed to submit individual onboarding." });
+    // Handle Prisma unique constraint violations
+    if (e?.code === "P2002") {
+      const field = (e?.meta?.target as string[] | undefined)?.[0] ?? "field";
+      return res.status(409).json({ error: `${field === "tin" ? "TIN" : field} is already in use by another account.` });
+    }
+    const errMsg = e?.response?.data?.error || e?.message || e?.meta?.cause || "Failed to submit individual onboarding.";
+    return res.status(500).json({ error: errMsg });
   }
 }
 

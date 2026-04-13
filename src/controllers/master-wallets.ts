@@ -47,13 +47,31 @@ export async function getMasterWalletByUser(req: Request, res: Response) {
   try {
     const { userId } = req.params;
 
-    const masterWallet = await db.masterWallet.findUnique({
+    let masterWallet = await db.masterWallet.findUnique({
       where:   { userId },
-      include: {
-        ...MASTER_INCLUDE,
-      },
+      include: { ...MASTER_INCLUDE },
     });
-    if (!masterWallet) return res.status(404).json({ data: null, error: "Master wallet not found" });
+
+    // Auto-create master wallet if it doesn't exist (e.g. legacy users)
+    if (!masterWallet) {
+      const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
+      if (!user) return res.status(404).json({ data: null, error: "User not found" });
+
+      const accountNumber = `GK${Date.now().toString().slice(-9)}`;
+      masterWallet = await db.masterWallet.create({
+        data: {
+          userId,
+          accountNumber,
+          balance:        0,
+          totalDeposited: 0,
+          totalWithdrawn: 0,
+          totalFees:      0,
+          netAssetValue:  0,
+          status:         "ACTIVE",
+        },
+        include: { ...MASTER_INCLUDE },
+      });
+    }
 
     // Fetch all portfolio wallets for this user with their portfolio info
     const portfolioWallets = await db.portfolioWallet.findMany({

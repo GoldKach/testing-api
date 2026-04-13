@@ -271,23 +271,26 @@ export async function submitCompanyOnboarding(req: Request, res: Response) {
         });
       }
 
-      return tx.companyOnboarding.findUnique({
-        where: { id: record.id },
-        include: {
-          directors: true,
-          ubos: true,
-          agent: {
-            select: {
-              id: true,
-              position: true,
-              user: { select: { name: true, email: true, imageUrl: true } },
-            },
+      return record.id;
+    }, { timeout: 30000 }); // 30s timeout — directors/UBOs can be large
+
+    // Fetch the full record outside the transaction (no atomicity needed here)
+    const result = await db.companyOnboarding.findUnique({
+      where: { id: saved },
+      include: {
+        directors: true,
+        ubos: true,
+        agent: {
+          select: {
+            id: true,
+            position: true,
+            user: { select: { name: true, email: true, imageUrl: true } },
           },
         },
-      });
+      },
     });
 
-    return res.status(200).json({ ok: true, data: saved });
+    return res.status(200).json({ ok: true, data: result });
   } catch (e) {
     console.error("submitCompanyOnboarding error:", e);
     return res.status(500).json({ error: "Failed to submit company onboarding." });
