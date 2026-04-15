@@ -8,12 +8,16 @@ import {
   deleteDeposit,
   approveDeposit,
   reverseDeposit,
+  getDepositFeeSummary,
 } from "@/controllers/deposits";
 
 const depositsRouter = Router();
 
 // List + filters + pagination + sorting
 depositsRouter.get("/deposits", listDeposits);
+
+// Get deposit fee summary for a user
+depositsRouter.get("/deposits/summary/:userId", getDepositFeeSummary);
 
 // Read single (supports ?include=user,wallet)
 depositsRouter.get("/deposits/:id", getDepositById);

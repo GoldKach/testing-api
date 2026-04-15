@@ -42,7 +42,7 @@ const LOGIN_CODE_TTL_MIN = 10;
 const makeSixDigitToken = () => String(crypto_1.default.randomInt(0, 1000000)).padStart(6, "0");
 function initiateLogin(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c, _d;
         const { identifier, password } = req.body;
         try {
             if (!identifier || !password) {
@@ -104,6 +104,39 @@ function initiateLogin(req, res) {
                     error: "Invalid credentials"
                 });
             }
+            if (!user.emailVerified) {
+                const verificationCode = makeSixDigitToken();
+                const codeExpiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MIN * 60000);
+                yield db_1.db.user.update({
+                    where: { id: user.id },
+                    data: { token: verificationCode },
+                });
+                try {
+                    yield (0, mailer_2.sendVerificationCodeResend)({
+                        to: user.email,
+                        name: (_b = (_a = user.firstName) !== null && _a !== void 0 ? _a : user.name) !== null && _b !== void 0 ? _b : "there",
+                        code: verificationCode,
+                    });
+                }
+                catch (emailError) {
+                    console.error("Error sending verification email:", emailError);
+                    return res.status(500).json({
+                        success: false,
+                        data: null,
+                        error: "Failed to send verification code. Please try again."
+                    });
+                }
+                return res.status(200).json({
+                    success: true,
+                    data: {
+                        userId: user.id,
+                        email: user.email,
+                        requiresEmailVerification: true,
+                        expiresAt: codeExpiresAt,
+                    },
+                    message: "Please verify your email first. A verification code has been sent to your inbox.",
+                });
+            }
             const verificationCode = makeSixDigitToken();
             const codeExpiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MIN * 60000);
             const tokenData = JSON.stringify({
@@ -118,7 +151,7 @@ function initiateLogin(req, res) {
             try {
                 yield (0, mailer_1.sendLoginVerificationCode)({
                     to: user.email,
-                    name: (_b = (_a = user.firstName) !== null && _a !== void 0 ? _a : user.name) !== null && _b !== void 0 ? _b : "there",
+                    name: (_d = (_c = user.firstName) !== null && _c !== void 0 ? _c : user.name) !== null && _d !== void 0 ? _d : "there",
                     code: verificationCode,
                 });
             }

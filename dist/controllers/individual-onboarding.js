@@ -105,9 +105,18 @@ function submitIndividualOnboarding(req, res) {
                     return res.status(400).json({ error: `Next of kin #${i + 1} missing: ${nMissing.join(", ")}` });
                 }
             }
+            let resolvedAgentId = (_a = payload.agentId) !== null && _a !== void 0 ? _a : null;
+            if (resolvedAgentId) {
+                const agentExists = yield db_1.db.staffProfile.findUnique({
+                    where: { id: resolvedAgentId },
+                    select: { id: true },
+                });
+                if (!agentExists)
+                    resolvedAgentId = null;
+            }
             const onboardingData = {
                 userId,
-                agentId: (_a = payload.agentId) !== null && _a !== void 0 ? _a : null,
+                agentId: resolvedAgentId,
                 fullName: String(payload.fullName),
                 dateOfBirth: (_b = parseDate(payload.dateOfBirth)) !== null && _b !== void 0 ? _b : undefined,
                 tin: payload.tin ? String(payload.tin).trim() : null,

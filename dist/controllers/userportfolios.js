@@ -77,7 +77,7 @@ const DEFAULT_INCLUDE = {
             masterWallet: {
                 select: {
                     id: true, accountNumber: true,
-                    netAssetValue: true, status: true,
+                    balance: true, netAssetValue: true, status: true,
                 },
             },
         },
@@ -150,6 +150,7 @@ function syncMasterWallet(client, userId) {
 }
 function createUserPortfolio(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a;
         try {
             const { userId, portfolioId, customName, amountInvested, bankFee: bankFeeInput, transactionFee: transactionFeeInput, feeAtBank: feeAtBankInput, assetAllocations, } = req.body;
             if (!userId || !portfolioId || !(customName === null || customName === void 0 ? void 0 : customName.trim())) {
@@ -165,9 +166,10 @@ function createUserPortfolio(req, res) {
                 });
             }
             const investedAmt = toNumber(amountInvested, 0);
-            const bankFee = toNumber(bankFeeInput, 30);
-            const transactionFee = toNumber(transactionFeeInput, 10);
-            const feeAtBank = toNumber(feeAtBankInput, 10);
+            const bankFee = 0;
+            const transactionFee = 0;
+            const feeAtBank = 0;
+            const totalFees = 0;
             for (const a of assetAllocations) {
                 if (!a.assetId) {
                     return res.status(400).json({ data: null, error: "Each allocation must have an assetId." });
@@ -180,7 +182,7 @@ function createUserPortfolio(req, res) {
                 }
             }
             const [user, portfolio] = yield Promise.all([
-                db_1.db.user.findUnique({ where: { id: userId }, select: { id: true, masterWallet: { select: { id: true } } } }),
+                db_1.db.user.findUnique({ where: { id: userId }, select: { id: true, masterWallet: { select: { id: true, balance: true } } } }),
                 db_1.db.portfolio.findUnique({ where: { id: portfolioId } }),
             ]);
             if (!user)
@@ -190,6 +192,15 @@ function createUserPortfolio(req, res) {
             }
             if (!portfolio)
                 return res.status(404).json({ data: null, error: "Portfolio not found." });
+            if (investedAmt > 0) {
+                const balance = (_a = user.masterWallet.balance) !== null && _a !== void 0 ? _a : 0;
+                if (balance < investedAmt) {
+                    return res.status(400).json({
+                        data: null,
+                        error: `Insufficient master wallet balance. Available: $${balance.toFixed(2)}, Required: $${investedAmt.toFixed(2)}`,
+                    });
+                }
+            }
             const nameConflict = yield db_1.db.userPortfolio.findFirst({
                 where: { userId, portfolioId, customName: customName.trim() },
                 select: { id: true },
@@ -211,8 +222,7 @@ function createUserPortfolio(req, res) {
                     return res.status(404).json({ data: null, error: `Asset ${a.assetId} not found.` });
                 }
             }
-            const totalFees = bankFee + transactionFee + feeAtBank;
-            const navAmt = investedAmt - totalFees;
+            const navAmt = investedAmt;
             const rows = assetAllocations.map((a) => {
                 const closePrice = toNumber(assetMap.get(a.assetId).closePrice, 0);
                 const { costPrice, stock, closeValue, lossGain } = computeUPA(navAmt, a.allocationPercentage, a.costPerShare, closePrice);
@@ -237,10 +247,10 @@ function createUserPortfolio(req, res) {
                         accountNumber,
                         userPortfolioId: up.id,
                         balance: investedAmt,
-                        bankFee,
-                        transactionFee,
-                        feeAtBank,
-                        totalFees,
+                        bankFee: 0,
+                        transactionFee: 0,
+                        feeAtBank: 0,
+                        totalFees: 0,
                         netAssetValue: navAmt,
                         status: "ACTIVE",
                     },
@@ -254,10 +264,10 @@ function createUserPortfolio(req, res) {
                         totalCostPrice: rows.reduce((s, r) => s + r.costPrice, 0),
                         totalCloseValue,
                         totalLossGain: totalCloseValue - investedAmt,
-                        bankFee,
-                        transactionFee,
-                        feeAtBank,
-                        totalFees,
+                        bankFee: 0,
+                        transactionFee: 0,
+                        feeAtBank: 0,
+                        totalFees: 0,
                         cashAtBank,
                         snapshotDate: new Date(),
                     },
@@ -292,7 +302,10 @@ function createUserPortfolio(req, res) {
                 if (investedAmt > 0) {
                     yield tx.masterWallet.update({
                         where: { userId },
-                        data: { netAssetValue: { increment: totalCloseValue } },
+                        data: {
+                            balance: { decrement: investedAmt },
+                            netAssetValue: { increment: totalCloseValue },
+                        },
                     });
                 }
                 return up.id;

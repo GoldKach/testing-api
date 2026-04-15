@@ -273,11 +273,20 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
     const { user, portfolio, wallet, userAssets } = userPortfolio;
 
     // Fetch first deposit fees (bankCost, transactionCost, cashAtBank)
-    const firstDeposit = await db.deposit.findFirst({
+    // Try isFirstDeposit=true first, then fall back to earliest MASTER deposit with fees
+    let firstDeposit = await db.deposit.findFirst({
       where: { userId: userPortfolio.userId, depositTarget: "MASTER", isFirstDeposit: true },
       select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
       orderBy: { createdAt: "asc" },
     });
+    if (!firstDeposit || (firstDeposit.totalFees === 0)) {
+      // Fall back: find earliest MASTER deposit that has any fees
+      firstDeposit = await db.deposit.findFirst({
+        where: { userId: userPortfolio.userId, depositTarget: "MASTER", totalFees: { gt: 0 } },
+        select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
+        orderBy: { createdAt: "asc" },
+      });
+    }
     const reportDate      = new Date();
     const reportingPeriod = getQuarter(reportDate);
 

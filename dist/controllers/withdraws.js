@@ -175,7 +175,7 @@ function getWithdrawalById(req, res) {
 }
 function createWithdrawal(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e;
         try {
             const { userId, userPortfolioId, portfolioWalletId, masterWalletId, withdrawalType, amount, referenceNo, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, createdById, createdByName, createdByRole, } = req.body;
             const wType = (withdrawalType === "REDEMPTION" ? "REDEMPTION" : "HARD_WITHDRAWAL");
@@ -254,94 +254,37 @@ function createWithdrawal(req, res) {
                     error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
                 });
             }
-            const newNAV = totalCloseValue - amt;
-            const totalCostPrice = up.userAssets.reduce((sum, ua) => sum + ua.costPrice, 0);
-            const nextGeneration = ((_e = (_d = up.subPortfolios[0]) === null || _d === void 0 ? void 0 : _d.generation) !== null && _e !== void 0 ? _e : 0) + 1;
-            const created = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
-                var _a;
-                const withdrawal = yield tx.withdrawal.create({
-                    data: {
-                        userId,
-                        userPortfolioId: userPortfolioId,
-                        portfolioWalletId: resolvedPortfolioWalletId,
-                        masterWalletId: resolvedMasterWalletId,
-                        withdrawalType: wType,
-                        amount: amt,
-                        referenceNo,
-                        transactionId: transactionId !== null && transactionId !== void 0 ? transactionId : null,
-                        transactionStatus: "APPROVED",
-                        approvedAt: new Date(),
-                        method: method !== null && method !== void 0 ? method : null,
-                        accountNo: accountNo !== null && accountNo !== void 0 ? accountNo : null,
-                        accountName: accountName !== null && accountName !== void 0 ? accountName : null,
-                        bankName: "",
-                        bankAccountName: "",
-                        bankBranch: "",
-                        description: description !== null && description !== void 0 ? description : null,
-                        createdById: createdById !== null && createdById !== void 0 ? createdById : null,
-                        createdByName: createdByName !== null && createdByName !== void 0 ? createdByName : null,
-                        createdByRole: (_a = createdByRole) !== null && _a !== void 0 ? _a : null,
-                    },
-                });
-                const redemptionSub = yield tx.subPortfolio.create({
-                    data: {
-                        userPortfolioId,
-                        generation: nextGeneration,
-                        label: `${up.customName} - Redemption`,
-                        amountInvested: 0,
-                        totalCostPrice,
-                        totalCloseValue,
-                        totalLossGain: totalCloseValue - totalCostPrice,
-                        bankFee: 0,
-                        transactionFee: 0,
-                        feeAtBank: 0,
-                        totalFees: 0,
-                        cashAtBank: 0,
-                        snapshotDate: new Date(),
-                    },
-                });
-                if (up.userAssets.length > 0) {
-                    yield tx.subPortfolioAsset.createMany({
-                        data: up.userAssets.map((ua) => ({
-                            subPortfolioId: redemptionSub.id,
-                            assetId: ua.assetId,
-                            allocationPercentage: ua.allocationPercentage,
-                            costPerShare: ua.costPerShare,
-                            costPrice: ua.costPrice,
-                            stock: ua.stock,
-                            closePrice: ua.asset.closePrice,
-                            closeValue: ua.closeValue,
-                            lossGain: ua.lossGain,
-                        })),
-                        skipDuplicates: true,
-                    });
-                }
-                yield tx.portfolioWallet.update({
-                    where: { id: up.wallet.id },
-                    data: {
-                        balance: { decrement: amt },
-                        netAssetValue: newNAV,
-                    },
-                });
-                yield tx.masterWallet.updateMany({
-                    where: { userId },
-                    data: { balance: { increment: amt } },
-                });
-                yield recomputePortfolioFromNav(tx, userPortfolioId, newNAV);
-                yield syncMasterWalletNav(tx, userId);
-                return withdrawal;
-            }), { timeout: 30000, maxWait: 35000 });
-            res.status(201).json({ data: created, error: null });
-            if (wType === "REDEMPTION" && userPortfolioId) {
-                (0, portfolio_performance_report_1.regenerateReportForPortfolio)(userPortfolioId).catch((err) => console.error(`[regenerateReport] createWithdrawal REDEMPTION failed for ${userPortfolioId}:`, err));
-            }
+            const created = yield db_1.db.withdrawal.create({
+                data: {
+                    userId,
+                    userPortfolioId: userPortfolioId,
+                    portfolioWalletId: resolvedPortfolioWalletId,
+                    masterWalletId: resolvedMasterWalletId,
+                    withdrawalType: wType,
+                    amount: amt,
+                    referenceNo,
+                    transactionId: transactionId !== null && transactionId !== void 0 ? transactionId : null,
+                    transactionStatus: "PENDING",
+                    method: method !== null && method !== void 0 ? method : null,
+                    accountNo: accountNo !== null && accountNo !== void 0 ? accountNo : null,
+                    accountName: accountName !== null && accountName !== void 0 ? accountName : null,
+                    bankName: "",
+                    bankAccountName: "",
+                    bankBranch: "",
+                    description: description !== null && description !== void 0 ? description : null,
+                    createdById: createdById !== null && createdById !== void 0 ? createdById : null,
+                    createdByName: createdByName !== null && createdByName !== void 0 ? createdByName : null,
+                    createdByRole: (_d = createdByRole) !== null && _d !== void 0 ? _d : null,
+                },
+            });
+            return res.status(201).json({ data: created, error: null });
         }
         catch (error) {
             if ((error === null || error === void 0 ? void 0 : error.code) === "P2002") {
                 return res.status(409).json({ data: null, error: "Duplicate transactionId" });
             }
             console.error("createWithdrawal error:", error);
-            return res.status(500).json({ data: null, error: (_f = error === null || error === void 0 ? void 0 : error.message) !== null && _f !== void 0 ? _f : "Failed to create withdrawal" });
+            return res.status(500).json({ data: null, error: (_e = error === null || error === void 0 ? void 0 : error.message) !== null && _e !== void 0 ? _e : "Failed to create withdrawal" });
         }
     });
 }
@@ -400,7 +343,7 @@ function approveWithdrawal(req, res) {
         var _a, _b, _c;
         try {
             const { id } = req.params;
-            const { approvedById, approvedByName, transactionId } = ((_a = req.body) !== null && _a !== void 0 ? _a : {});
+            const { approvedById, approvedByName, transactionId, assetPrices, approvedAt } = ((_a = req.body) !== null && _a !== void 0 ? _a : {});
             const existing = yield db_1.db.withdrawal.findUnique({
                 where: { id },
                 include: {
@@ -419,6 +362,20 @@ function approveWithdrawal(req, res) {
             if (existing.withdrawalType === "HARD_WITHDRAWAL" && !(transactionId === null || transactionId === void 0 ? void 0 : transactionId.trim())) {
                 return res.status(400).json({ data: null, error: "transactionId is required for HARD_WITHDRAWAL approval" });
             }
+            if (existing.withdrawalType === "REDEMPTION") {
+                if (!existing.portfolioWallet) {
+                    return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
+                }
+                if (!existing.userPortfolioId) {
+                    return res.status(400).json({ data: null, error: "No portfolio linked to this redemption" });
+                }
+                if (!assetPrices || Object.keys(assetPrices).length === 0) {
+                    return res.status(400).json({
+                        data: null,
+                        error: "assetPrices is required for REDEMPTION approval. Provide closing prices for each asset."
+                    });
+                }
+            }
             if (existing.withdrawalType === "HARD_WITHDRAWAL") {
                 const balance = (_c = (_b = existing.masterWallet) === null || _b === void 0 ? void 0 : _b.balance) !== null && _c !== void 0 ? _c : 0;
                 if (balance < existing.amount) {
@@ -426,14 +383,6 @@ function approveWithdrawal(req, res) {
                         data: null,
                         error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
                     });
-                }
-            }
-            else {
-                if (!existing.portfolioWallet) {
-                    return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
-                }
-                if (!existing.userPortfolioId) {
-                    return res.status(400).json({ data: null, error: "No portfolio linked to this redemption" });
                 }
             }
             let redemptionData = null;
@@ -447,15 +396,32 @@ function approveWithdrawal(req, res) {
                 });
                 if (!up)
                     return res.status(404).json({ data: null, error: "Portfolio not found" });
-                const totalCloseValue = up.userAssets.reduce((sum, ua) => sum + ua.closeValue, 0);
+                const manualClosePriceByAsset = new Map();
+                let totalCloseValue = 0;
+                for (const ua of up.userAssets) {
+                    const manualPrice = assetPrices === null || assetPrices === void 0 ? void 0 : assetPrices[ua.assetId];
+                    if (manualPrice === undefined || manualPrice <= 0) {
+                        return res.status(400).json({
+                            data: null,
+                            error: `Invalid or missing closing price for asset ${ua.assetId}. Admin must provide all asset prices.`,
+                        });
+                    }
+                    manualClosePriceByAsset.set(ua.assetId, manualPrice);
+                    totalCloseValue += ua.stock * manualPrice;
+                    yield db_1.db.asset.update({
+                        where: { id: ua.assetId },
+                        data: { closePrice: manualPrice },
+                    });
+                }
                 if (totalCloseValue < existing.amount) {
                     return res.status(400).json({
                         data: null,
-                        error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
+                        error: `Insufficient portfolio close value at provided prices. Available: ${totalCloseValue.toFixed(2)}`,
                     });
                 }
-                redemptionData = { userPortfolioWithAssets: up, totalCloseValue };
+                redemptionData = { userPortfolioWithAssets: up, totalCloseValue, manualClosePriceByAsset };
             }
+            const approvalDate = approvedAt ? new Date(approvedAt) : new Date();
             const approved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
                 var _a, _b, _c;
                 const updatedWithdrawal = yield tx.withdrawal.update({
@@ -465,7 +431,7 @@ function approveWithdrawal(req, res) {
                         transactionId: (_a = transactionId === null || transactionId === void 0 ? void 0 : transactionId.trim()) !== null && _a !== void 0 ? _a : null,
                         approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
                         approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
-                        approvedAt: new Date(),
+                        approvedAt: approvalDate,
                     },
                 });
                 if (existing.withdrawalType === "HARD_WITHDRAWAL") {
@@ -478,7 +444,7 @@ function approveWithdrawal(req, res) {
                     });
                 }
                 else {
-                    const { userPortfolioWithAssets: up, totalCloseValue } = redemptionData;
+                    const { userPortfolioWithAssets: up, totalCloseValue, manualClosePriceByAsset } = redemptionData;
                     const newNAV = totalCloseValue - existing.amount;
                     const totalCostPrice = up.userAssets.reduce((sum, ua) => sum + ua.costPrice, 0);
                     const nextGeneration = ((_c = (_b = up.subPortfolios[0]) === null || _b === void 0 ? void 0 : _b.generation) !== null && _c !== void 0 ? _c : 0) + 1;
@@ -496,22 +462,25 @@ function approveWithdrawal(req, res) {
                             feeAtBank: 0,
                             totalFees: 0,
                             cashAtBank: 0,
-                            snapshotDate: new Date(),
+                            snapshotDate: approvalDate,
                         },
                     });
                     if (up.userAssets.length > 0) {
                         yield tx.subPortfolioAsset.createMany({
-                            data: up.userAssets.map((ua) => ({
-                                subPortfolioId: redemptionSub.id,
-                                assetId: ua.assetId,
-                                allocationPercentage: ua.allocationPercentage,
-                                costPerShare: ua.costPerShare,
-                                costPrice: ua.costPrice,
-                                stock: ua.stock,
-                                closePrice: ua.asset.closePrice,
-                                closeValue: ua.closeValue,
-                                lossGain: ua.lossGain,
-                            })),
+                            data: up.userAssets.map((ua) => {
+                                var _a, _b, _c;
+                                return ({
+                                    subPortfolioId: redemptionSub.id,
+                                    assetId: ua.assetId,
+                                    allocationPercentage: ua.allocationPercentage,
+                                    costPerShare: ua.costPerShare,
+                                    costPrice: ua.costPrice,
+                                    stock: ua.stock,
+                                    closePrice: (_a = manualClosePriceByAsset.get(ua.assetId)) !== null && _a !== void 0 ? _a : ua.asset.closePrice,
+                                    closeValue: ua.stock * ((_b = manualClosePriceByAsset.get(ua.assetId)) !== null && _b !== void 0 ? _b : ua.asset.closePrice),
+                                    lossGain: (ua.stock * ((_c = manualClosePriceByAsset.get(ua.assetId)) !== null && _c !== void 0 ? _c : ua.asset.closePrice)) - ua.costPrice,
+                                });
+                            }),
                             skipDuplicates: true,
                         });
                     }

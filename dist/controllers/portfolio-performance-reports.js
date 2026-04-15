@@ -41,7 +41,7 @@ function determineAssetClass(asset) {
 }
 function generatePortfolioReport(userPortfolioId_1) {
     return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date()) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         try {
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
@@ -59,8 +59,12 @@ function generatePortfolioReport(userPortfolioId_1) {
                 console.error(`UserPortfolio ${userPortfolioId} not found`);
                 return null;
             }
-            const totalFees = (_b = (_a = userPortfolio.wallet) === null || _a === void 0 ? void 0 : _a.totalFees) !== null && _b !== void 0 ? _b : 0;
-            const walletBalance = (_d = (_c = userPortfolio.wallet) === null || _c === void 0 ? void 0 : _c.balance) !== null && _d !== void 0 ? _d : 0;
+            const wallet = userPortfolio.wallet;
+            const totalFees = (_a = wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _a !== void 0 ? _a : 0;
+            const walletBalance = (_b = wallet === null || wallet === void 0 ? void 0 : wallet.balance) !== null && _b !== void 0 ? _b : 0;
+            const bankCost = (_c = wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _c !== void 0 ? _c : 0;
+            const transactionCost = (_d = wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _d !== void 0 ? _d : 0;
+            const cashAtBank = (_e = wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _e !== void 0 ? _e : 0;
             if (userPortfolio.userAssets.length === 0) {
                 return {
                     userPortfolioId,
@@ -71,6 +75,9 @@ function generatePortfolioReport(userPortfolioId_1) {
                     totalPercentage: 0,
                     totalFees,
                     netAssetValue: walletBalance - totalFees,
+                    bankCost,
+                    transactionCost,
+                    cashAtBank,
                     assetBreakdown: [],
                     subPortfolioSnapshots: [],
                 };
@@ -82,20 +89,34 @@ function generatePortfolioReport(userPortfolioId_1) {
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
             for (const ua of userPortfolio.userAssets) {
-                totalCostPrice += (_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0;
-                totalCloseValue += (_f = ua.closeValue) !== null && _f !== void 0 ? _f : 0;
-                totalLossGain += (_g = ua.lossGain) !== null && _g !== void 0 ? _g : 0;
+                totalCostPrice += (_f = ua.costPrice) !== null && _f !== void 0 ? _f : 0;
+                totalCloseValue += (_g = ua.closeValue) !== null && _g !== void 0 ? _g : 0;
+                totalLossGain += (_h = ua.lossGain) !== null && _h !== void 0 ? _h : 0;
                 const cls = determineAssetClass(ua.asset);
                 const entry = classMap.get(cls);
                 entry.holdings += 1;
-                entry.totalCashValue += (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0;
+                entry.totalCashValue += (_j = ua.closeValue) !== null && _j !== void 0 ? _j : 0;
             }
             const assetBreakdown = Array.from(classMap.entries()).map(([assetClass, data]) => ({
                 assetClass,
                 holdings: data.holdings,
                 totalCashValue: data.totalCashValue,
-                percentage: totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0,
+                percentage: totalCloseValue > 0 ? (data.totalCashValue / (totalCloseValue + cashAtBank)) * 100 : 0,
             }));
+            const cashIndex = assetBreakdown.findIndex((a) => a.assetClass === "CASH");
+            if (cashIndex >= 0) {
+                assetBreakdown[cashIndex].totalCashValue = cashAtBank;
+                assetBreakdown[cashIndex].percentage = (totalCloseValue + cashAtBank) > 0
+                    ? (cashAtBank / (totalCloseValue + cashAtBank)) * 100
+                    : 0;
+                assetBreakdown[cashIndex].holdings = cashAtBank > 0 ? 1 : 0;
+            }
+            const totalWithCash = totalCloseValue + cashAtBank;
+            assetBreakdown.forEach((a) => {
+                if (a.assetClass !== "CASH" && totalWithCash > 0) {
+                    a.percentage = (a.totalCashValue / totalWithCash) * 100;
+                }
+            });
             const totalPercentage = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
             const netAssetValue = totalCloseValue - totalFees;
             const subPortfolioSnapshots = userPortfolio.subPortfolios.map((sub) => ({
@@ -118,6 +139,9 @@ function generatePortfolioReport(userPortfolioId_1) {
                 totalPercentage,
                 totalFees,
                 netAssetValue,
+                bankCost,
+                transactionCost,
+                cashAtBank,
                 assetBreakdown,
                 subPortfolioSnapshots,
             };
@@ -141,6 +165,9 @@ function savePortfolioReport(report) {
                     totalPercentage: report.totalPercentage,
                     totalFees: report.totalFees,
                     netAssetValue: report.netAssetValue,
+                    bankCost: report.bankCost,
+                    transactionCost: report.transactionCost,
+                    cashAtBank: report.cashAtBank,
                     assetBreakdown: {
                         create: report.assetBreakdown.map((b) => ({
                             assetClass: b.assetClass,

@@ -4,6 +4,7 @@ const express_1 = require("express");
 const deposits_1 = require("../controllers/deposits");
 const depositsRouter = (0, express_1.Router)();
 depositsRouter.get("/deposits", deposits_1.listDeposits);
+depositsRouter.get("/deposits/summary/:userId", deposits_1.getDepositFeeSummary);
 depositsRouter.get("/deposits/:id", deposits_1.getDepositById);
 depositsRouter.post("/deposits", deposits_1.createDeposit);
 depositsRouter.patch("/deposits/:id", deposits_1.updateDeposit);

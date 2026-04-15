@@ -755,3 +755,47 @@ export async function deleteDeposit(req: Request, res: Response) {
     return res.status(500).json({ data: null, error: "Failed to delete deposit" });
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  GET DEPOSIT FEE SUMMARY  GET /deposits/summary/:userId             */
+/* ------------------------------------------------------------------ */
+export async function getDepositFeeSummary(req: Request, res: Response) {
+  try {
+    const { userId } = req.params;
+
+    const deposits = await db.deposit.findMany({
+      where: {
+        userId,
+        transactionStatus: Status.APPROVED,
+      },
+      select: {
+        bankCost: true,
+        transactionCost: true,
+        cashAtBank: true,
+        totalFees: true,
+      },
+    });
+
+    const summary = deposits.reduce(
+      (acc, deposit) => ({
+        totalBankCost: acc.totalBankCost + (deposit.bankCost ?? 0),
+        totalTransactionCost: acc.totalTransactionCost + (deposit.transactionCost ?? 0),
+        totalCashAtBank: acc.totalCashAtBank + (deposit.cashAtBank ?? 0),
+        totalFees: acc.totalFees + (deposit.totalFees ?? 0),
+        depositCount: acc.depositCount + 1,
+      }),
+      {
+        totalBankCost: 0,
+        totalTransactionCost: 0,
+        totalCashAtBank: 0,
+        totalFees: 0,
+        depositCount: 0,
+      }
+    );
+
+    return res.status(200).json({ data: summary, error: null });
+  } catch (error) {
+    console.error("getDepositFeeSummary error:", error);
+    return res.status(500).json({ data: null, error: "Failed to get deposit fee summary" });
+  }
+}

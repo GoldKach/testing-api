@@ -292,10 +292,7 @@ function createUser(req, res) {
             }
             const hashedPassword = yield bcryptjs_1.default.hash(password, 12);
             const verificationCode = makeSixDigitToken();
-            const bankFee = 30;
-            const transactionFee = 10;
-            const feeAtBank = 10;
-            const totalFees = bankFee + transactionFee + feeAtBank;
+            const totalFees = 0;
             let newUser;
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {

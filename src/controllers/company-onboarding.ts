@@ -180,9 +180,22 @@ export async function submitCompanyOnboarding(req: Request, res: Response) {
     }
 
     // --- Build main data ---
+    let validAgentId: string | null = null;
+    if (payload.agentId) {
+      const agentExists = await db.staffProfile.findUnique({
+        where: { userId: payload.agentId },
+        select: { id: true },
+      });
+      if (agentExists) {
+        validAgentId = agentExists.id;
+      }
+    } else {
+      validAgentId = null;
+    }
+
     const onboardingData: Prisma.CompanyOnboardingUncheckedCreateInput = {
       userId,
-      agentId: payload.agentId ?? null,
+      agentId: validAgentId,
 
       companyName: String(payload.companyName).trim(),
       email: String(payload.email).trim(),

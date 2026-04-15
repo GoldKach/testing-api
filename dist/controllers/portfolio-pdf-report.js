@@ -189,7 +189,7 @@ function drawPageFooter(doc, pageNum) {
 }
 function generatePortfolioPdfReport(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
         try {
             const { userPortfolioId } = req.params;
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
@@ -219,6 +219,18 @@ function generatePortfolioPdfReport(req, res) {
                 return res.status(404).json({ data: null, error: "Portfolio not found" });
             }
             const { user, portfolio, wallet, userAssets } = userPortfolio;
+            let firstDeposit = yield db_1.db.deposit.findFirst({
+                where: { userId: userPortfolio.userId, depositTarget: "MASTER", isFirstDeposit: true },
+                select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
+                orderBy: { createdAt: "asc" },
+            });
+            if (!firstDeposit || (firstDeposit.totalFees === 0)) {
+                firstDeposit = yield db_1.db.deposit.findFirst({
+                    where: { userId: userPortfolio.userId, depositTarget: "MASTER", totalFees: { gt: 0 } },
+                    select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
+                    orderBy: { createdAt: "asc" },
+                });
+            }
             const reportDate = new Date();
             const reportingPeriod = getQuarter(reportDate);
             let totalCostPrice = 0;
@@ -240,10 +252,10 @@ function generatePortfolioPdfReport(req, res) {
                 entry.totalCashValue += close;
             }
             const returnPct = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
-            const bankFee = Number((_d = wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _d !== void 0 ? _d : 30);
-            const transactionFee = Number((_e = wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _e !== void 0 ? _e : 10);
-            const feeAtBank = Number((_f = wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _f !== void 0 ? _f : 10);
-            const totalFees = Number((_g = wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _g !== void 0 ? _g : 50);
+            const bankFee = Number((_e = (_d = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.bankCost) !== null && _d !== void 0 ? _d : wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _e !== void 0 ? _e : 0);
+            const transactionFee = Number((_g = (_f = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.transactionCost) !== null && _f !== void 0 ? _f : wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _g !== void 0 ? _g : 0);
+            const feeAtBank = Number((_j = (_h = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.cashAtBank) !== null && _h !== void 0 ? _h : wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _j !== void 0 ? _j : 0);
+            const totalFees = Number((_l = (_k = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.totalFees) !== null && _k !== void 0 ? _k : wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _l !== void 0 ? _l : 0);
             const grandTotal = totalCloseValue + feeAtBank;
             const doc = new pdfkit_1.default({
                 size: "A4",
@@ -264,7 +276,7 @@ function generatePortfolioPdfReport(req, res) {
             y = infoTable(doc, [
                 ["Client Name", `${user.firstName} ${user.lastName}`],
                 ["Fund Name", userPortfolio.customName || portfolio.name],
-                ["Account Number", (_j = (_h = user.masterWallet) === null || _h === void 0 ? void 0 : _h.accountNumber) !== null && _j !== void 0 ? _j : "—"],
+                ["Account Number", (_o = (_m = user.masterWallet) === null || _m === void 0 ? void 0 : _m.accountNumber) !== null && _o !== void 0 ? _o : "—"],
                 ["Reporting Period", reportingPeriod],
                 ["Report Date", fmtDate(reportDate)],
             ], y);
@@ -316,12 +328,12 @@ function generatePortfolioPdfReport(req, res) {
             y = tableHeader(doc, holdCols, y, 22);
             alt = false;
             for (const ua of userAssets) {
-                const gain = Number((_k = ua.lossGain) !== null && _k !== void 0 ? _k : 0);
+                const gain = Number((_p = ua.lossGain) !== null && _p !== void 0 ? _p : 0);
                 y = tableRow(doc, holdCols, [
                     ua.asset.symbol,
                     ua.asset.description,
                     fmtNum(ua.stock, 2),
-                    `${Number((_l = ua.allocationPercentage) !== null && _l !== void 0 ? _l : 0).toFixed(0)}%`,
+                    `${Number((_q = ua.allocationPercentage) !== null && _q !== void 0 ? _q : 0).toFixed(0)}%`,
                     fmt$(ua.costPerShare),
                     fmt$(ua.costPrice),
                     fmt$(ua.asset.closePrice),

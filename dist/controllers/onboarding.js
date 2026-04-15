@@ -68,12 +68,21 @@ function parseOwnershipType(v) {
 }
 function submitIndividualOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
         try {
             const userId = getUserId(req);
             if (!userId)
                 return res.status(401).json({ error: "Not authenticated (userId missing)." });
             const payload = req.body;
+            let resolvedAgentId = (_a = payload.agentId) !== null && _a !== void 0 ? _a : null;
+            if (resolvedAgentId) {
+                const agentExists = yield db_1.db.staffProfile.findUnique({
+                    where: { id: resolvedAgentId },
+                    select: { id: true },
+                });
+                if (!agentExists)
+                    resolvedAgentId = null;
+            }
             const missing = requireFields(payload, [
                 "fullName",
                 "dateOfBirth",
@@ -151,7 +160,7 @@ function submitIndividualOnboarding(req, res) {
             }
             const onboardingData = {
                 userId,
-                agentId: (_a = payload.agentId) !== null && _a !== void 0 ? _a : null,
+                agentId: resolvedAgentId,
                 fullName: String(payload.fullName),
                 dateOfBirth: (_b = parseDate(payload.dateOfBirth)) !== null && _b !== void 0 ? _b : undefined,
                 tin: payload.tin ? String(payload.tin).trim() : null,
@@ -241,7 +250,12 @@ function submitIndividualOnboarding(req, res) {
         }
         catch (e) {
             console.error("submitIndividualOnboarding error:", e);
-            return res.status(500).json({ error: "Failed to submit individual onboarding." });
+            if ((e === null || e === void 0 ? void 0 : e.code) === "P2002") {
+                const field = (_q = (_p = (_o = e === null || e === void 0 ? void 0 : e.meta) === null || _o === void 0 ? void 0 : _o.target) === null || _p === void 0 ? void 0 : _p[0]) !== null && _q !== void 0 ? _q : "field";
+                return res.status(409).json({ error: `${field === "tin" ? "TIN" : field} is already in use by another account.` });
+            }
+            const errMsg = ((_s = (_r = e === null || e === void 0 ? void 0 : e.response) === null || _r === void 0 ? void 0 : _r.data) === null || _s === void 0 ? void 0 : _s.error) || (e === null || e === void 0 ? void 0 : e.message) || ((_t = e === null || e === void 0 ? void 0 : e.meta) === null || _t === void 0 ? void 0 : _t.cause) || "Failed to submit individual onboarding.";
+            return res.status(500).json({ error: errMsg });
         }
     });
 }

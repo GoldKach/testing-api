@@ -17,6 +17,7 @@ exports.approveDeposit = approveDeposit;
 exports.rejectDeposit = rejectDeposit;
 exports.reverseDeposit = reverseDeposit;
 exports.deleteDeposit = deleteDeposit;
+exports.getDepositFeeSummary = getDepositFeeSummary;
 const db_1 = require("../db/db");
 const Status = {
     PENDING: "PENDING",
@@ -61,11 +62,11 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
         const prevTotal = up.totalInvested;
         const nextGeneration = ((_b = (_a = up.subPortfolios[0]) === null || _a === void 0 ? void 0 : _a.generation) !== null && _b !== void 0 ? _b : 0) + 1;
         const newTotalInvested = prevTotal + topupAmount;
-        const bankFee = up.wallet.bankFee;
-        const transactionFee = up.wallet.transactionFee;
-        const feeAtBank = up.wallet.feeAtBank;
-        const totalFees = bankFee + transactionFee + feeAtBank;
-        const topupNAV = topupAmount - totalFees;
+        const bankFee = 0;
+        const transactionFee = 0;
+        const feeAtBank = 0;
+        const totalFees = 0;
+        const topupNAV = topupAmount;
         const subAssetRows = up.userAssets.map((ua) => {
             var _a, _b;
             const provided = assetPrices[ua.assetId];
@@ -113,8 +114,7 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
                 skipDuplicates: true,
             });
         }
-        const newTotalFees = up.wallet.totalFees + totalFees;
-        const newNetAssetValue = newTotalInvested - newTotalFees;
+        const newNetAssetValue = newTotalInvested;
         const closePriceByAsset = new Map(subAssetRows.map((r) => [r.assetId, r.closePrice]));
         const assetUpdates = up.userAssets.map((ua) => {
             var _a, _b, _c;
@@ -145,7 +145,7 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
             where: { id: up.wallet.id },
             data: {
                 balance: { increment: topupAmount },
-                totalFees: newTotalFees,
+                totalFees: 0,
                 netAssetValue: newNetAssetValue,
             },
         });
@@ -158,7 +158,7 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
                 newTotalInvested,
                 newTotalCloseValue,
                 newTotalLossGain: newTotalCloseValue - newTotalInvested,
-                newTotalFees,
+                newTotalFees: 0,
                 newNetAssetValue,
                 status: "MERGED",
                 mergedAt: new Date(),
@@ -257,7 +257,7 @@ function createDeposit(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g;
         try {
-            const { userId, userPortfolioId, amount, depositTarget, transactionId, mobileNo, referenceNo, accountNo, method, description, createdById, createdByName, createdByRole, proofUrl, proofFileName, } = req.body;
+            const { userId, userPortfolioId, amount, depositTarget, transactionId, mobileNo, referenceNo, accountNo, method, description, createdById, createdByName, createdByRole, proofUrl, proofFileName, bankCost, transactionCost, cashAtBank, } = req.body;
             const target = (depositTarget === "ALLOCATION" ? "ALLOCATION" : "MASTER");
             const amt = num(amount, NaN);
             if (!userId || !Number.isFinite(amt) || amt <= 0) {
@@ -299,6 +299,25 @@ function createDeposit(req, res) {
                     });
                 }
             }
+            let isFirstDeposit = false;
+            if (target === "MASTER") {
+                const priorDeposit = yield db_1.db.deposit.findFirst({
+                    where: { userId, depositTarget: "MASTER" },
+                    select: { id: true },
+                });
+                isFirstDeposit = !priorDeposit;
+            }
+            const masterWallet = yield db_1.db.masterWallet.findUnique({
+                where: { userId },
+                select: { accountNumber: true },
+            });
+            const autoRefNo = (masterWallet === null || masterWallet === void 0 ? void 0 : masterWallet.accountNumber)
+                ? `${masterWallet.accountNumber}-${Date.now()}`
+                : referenceNo !== null && referenceNo !== void 0 ? referenceNo : `DEP-${Date.now()}`;
+            const fBankCost = isFirstDeposit ? num(bankCost, 0) : 0;
+            const fTransactionCost = isFirstDeposit ? num(transactionCost, 0) : 0;
+            const fCashAtBank = isFirstDeposit ? num(cashAtBank, 0) : 0;
+            const fTotalFees = fBankCost + fTransactionCost + fCashAtBank;
             const created = yield db_1.db.deposit.create({
                 data: {
                     userId,
@@ -310,7 +329,7 @@ function createDeposit(req, res) {
                     transactionStatus: Status.PENDING,
                     transactionId: transactionId !== null && transactionId !== void 0 ? transactionId : null,
                     mobileNo: mobileNo !== null && mobileNo !== void 0 ? mobileNo : null,
-                    referenceNo: referenceNo !== null && referenceNo !== void 0 ? referenceNo : null,
+                    referenceNo: autoRefNo,
                     accountNo: accountNo !== null && accountNo !== void 0 ? accountNo : null,
                     method: method !== null && method !== void 0 ? method : null,
                     description: description !== null && description !== void 0 ? description : null,
@@ -319,6 +338,11 @@ function createDeposit(req, res) {
                     createdById: createdById !== null && createdById !== void 0 ? createdById : null,
                     createdByName: createdByName !== null && createdByName !== void 0 ? createdByName : null,
                     createdByRole: (_g = createdByRole) !== null && _g !== void 0 ? _g : null,
+                    bankCost: fBankCost,
+                    transactionCost: fTransactionCost,
+                    cashAtBank: fCashAtBank,
+                    totalFees: fTotalFees,
+                    isFirstDeposit,
                 },
                 include: DEPOSIT_INCLUDE,
             });
@@ -410,7 +434,7 @@ function approveDeposit(req, res) {
                 }
             }
             const approved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
-                var _a;
+                var _a, _b;
                 const row = yield tx.deposit.update({
                     where: { id },
                     data: {
@@ -422,12 +446,12 @@ function approveDeposit(req, res) {
                     },
                 });
                 if (existing.depositTarget === "MASTER") {
+                    const netAmount = existing.amount - ((_b = existing.totalFees) !== null && _b !== void 0 ? _b : 0);
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
-                        data: {
-                            balance: { increment: existing.amount },
-                            totalDeposited: { increment: existing.amount },
-                        },
+                        data: Object.assign({ balance: { increment: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { increment: existing.amount } }, (existing.isFirstDeposit && existing.totalFees > 0
+                            ? { totalFees: existing.totalFees }
+                            : {})),
                     });
                 }
                 else {
@@ -567,6 +591,46 @@ function deleteDeposit(req, res) {
         catch (error) {
             console.error("deleteDeposit error:", error);
             return res.status(500).json({ data: null, error: "Failed to delete deposit" });
+        }
+    });
+}
+function getDepositFeeSummary(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { userId } = req.params;
+            const deposits = yield db_1.db.deposit.findMany({
+                where: {
+                    userId,
+                    transactionStatus: Status.APPROVED,
+                },
+                select: {
+                    bankCost: true,
+                    transactionCost: true,
+                    cashAtBank: true,
+                    totalFees: true,
+                },
+            });
+            const summary = deposits.reduce((acc, deposit) => {
+                var _a, _b, _c, _d;
+                return ({
+                    totalBankCost: acc.totalBankCost + ((_a = deposit.bankCost) !== null && _a !== void 0 ? _a : 0),
+                    totalTransactionCost: acc.totalTransactionCost + ((_b = deposit.transactionCost) !== null && _b !== void 0 ? _b : 0),
+                    totalCashAtBank: acc.totalCashAtBank + ((_c = deposit.cashAtBank) !== null && _c !== void 0 ? _c : 0),
+                    totalFees: acc.totalFees + ((_d = deposit.totalFees) !== null && _d !== void 0 ? _d : 0),
+                    depositCount: acc.depositCount + 1,
+                });
+            }, {
+                totalBankCost: 0,
+                totalTransactionCost: 0,
+                totalCashAtBank: 0,
+                totalFees: 0,
+                depositCount: 0,
+            });
+            return res.status(200).json({ data: summary, error: null });
+        }
+        catch (error) {
+            console.error("getDepositFeeSummary error:", error);
+            return res.status(500).json({ data: null, error: "Failed to get deposit fee summary" });
         }
     });
 }

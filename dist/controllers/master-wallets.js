@@ -44,12 +44,29 @@ function getMasterWalletByUser(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
-            const masterWallet = yield db_1.db.masterWallet.findUnique({
+            let masterWallet = yield db_1.db.masterWallet.findUnique({
                 where: { userId },
                 include: Object.assign({}, MASTER_INCLUDE),
             });
-            if (!masterWallet)
-                return res.status(404).json({ data: null, error: "Master wallet not found" });
+            if (!masterWallet) {
+                const user = yield db_1.db.user.findUnique({ where: { id: userId }, select: { id: true } });
+                if (!user)
+                    return res.status(404).json({ data: null, error: "User not found" });
+                const accountNumber = `GK${Date.now().toString().slice(-9)}`;
+                masterWallet = yield db_1.db.masterWallet.create({
+                    data: {
+                        userId,
+                        accountNumber,
+                        balance: 0,
+                        totalDeposited: 0,
+                        totalWithdrawn: 0,
+                        totalFees: 0,
+                        netAssetValue: 0,
+                        status: "ACTIVE",
+                    },
+                    include: Object.assign({}, MASTER_INCLUDE),
+                });
+            }
             const portfolioWallets = yield db_1.db.portfolioWallet.findMany({
                 where: { userPortfolio: { userId } },
                 orderBy: { createdAt: "desc" },

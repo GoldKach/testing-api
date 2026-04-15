@@ -49,12 +49,16 @@ exports.sendResetEmailResend = sendResetEmailResend;
 exports.sendVerificationCodeResend = sendVerificationCodeResend;
 exports.sendOnboardingSubmittedEmail = sendOnboardingSubmittedEmail;
 exports.sendAccountVerifiedEmail = sendAccountVerifiedEmail;
+exports.sendAccountDeactivatedEmail = sendAccountDeactivatedEmail;
+exports.sendAccountZeroBalanceWarningEmail = sendAccountZeroBalanceWarningEmail;
 const React = __importStar(require("react"));
 const resend_1 = require("resend");
 const reset_password_email_1 = __importDefault(require("../emails/reset-password-email"));
 const VerificationCodeEmail_1 = __importDefault(require("../emails/VerificationCodeEmail"));
 const AccountVerifiedEmail_1 = __importDefault(require("../emails/AccountVerifiedEmail"));
 const OnboardingSubmittedEmail_1 = __importDefault(require("../emails/OnboardingSubmittedEmail"));
+const AccountDeactivatedEmail_1 = __importDefault(require("../emails/AccountDeactivatedEmail"));
+const AccountZeroBalanceWarningEmail_1 = __importDefault(require("../emails/AccountZeroBalanceWarningEmail"));
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
     throw new Error("RESEND_API_KEY is not set");
@@ -122,6 +126,28 @@ function sendAccountVerifiedEmail(args) {
             subject: "Your GoldKach email has been verified — next steps",
             react: React.createElement(AccountVerifiedEmail_1.default, { name }),
             tags: [{ name: "category", value: "account-verified" }],
+        });
+    });
+}
+function sendAccountDeactivatedEmail(args) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { to, name = "there", daysInactive = 7 } = args;
+        return sendEmail({
+            to,
+            subject: "Your GoldKach Account Has Been Deactivated",
+            react: React.createElement(AccountDeactivatedEmail_1.default, { name, daysInactive }),
+            tags: [{ name: "category", value: "account-deactivated" }],
+        });
+    });
+}
+function sendAccountZeroBalanceWarningEmail(args) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { to, name = "there", daysRemaining = 7 } = args;
+        return sendEmail({
+            to,
+            subject: "Action Required: Your GoldKach Account Will Be Deactivated",
+            react: React.createElement(AccountZeroBalanceWarningEmail_1.default, { name, daysRemaining }),
+            tags: [{ name: "category", value: "zero-balance-warning" }],
         });
     });
 }

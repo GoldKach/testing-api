@@ -131,6 +131,10 @@ model User {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
+  // Zero balance tracking for auto-deactivation
+  zeroBalanceStartedAt    DateTime?
+  zeroBalanceWarningSentAt DateTime?
+
   accounts         Account[]
   sessions         Session[]
   resetTokens      PasswordResetToken[]
@@ -782,6 +786,11 @@ model UserPortfolioPerformanceReport {
   totalFees       Float @default(0)
   netAssetValue   Float @default(0)
 
+  // Deductions
+  bankCost        Float @default(0)
+  transactionCost Float @default(0)
+  cashAtBank      Float @default(0)
+
   assetBreakdown PortfolioAssetBreakdown[]
 
   // Sub-portfolio breakdown for full drill-down in reports
@@ -1092,4 +1101,5 @@ model CompanyUBO {
 // Add these two lines to the StaffProfile model:
 //   individualOnboardingClients IndividualOnboarding[] @relation("IndividualOnboardingAgent")
 //   companyOnboardingClients    CompanyOnboarding[]    @relation("CompanyOnboardingAgent")
-// ===================
+// =====================
+

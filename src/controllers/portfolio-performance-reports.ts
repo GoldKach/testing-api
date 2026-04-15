@@ -573,6 +573,9 @@ interface GeneratedReport {
   totalPercentage:      number;
   totalFees:            number;
   netAssetValue:        number;
+  bankCost:             number;
+  transactionCost:       number;
+  cashAtBank:           number;
   assetBreakdown:       AssetBreakdown[];
   subPortfolioSnapshots: SubPortfolioSnapshot[];
 }
@@ -636,8 +639,12 @@ async function generatePortfolioReport(
       return null;
     }
 
-    const totalFees     = userPortfolio.wallet?.totalFees    ?? 0;
-    const walletBalance = userPortfolio.wallet?.balance      ?? 0;
+    const wallet = userPortfolio.wallet;
+    const totalFees         = wallet?.totalFees         ?? 0;
+    const walletBalance     = wallet?.balance           ?? 0;
+    const bankCost          = wallet?.bankFee           ?? 0;
+    const transactionCost   = wallet?.transactionFee    ?? 0;
+    const cashAtBank        = wallet?.feeAtBank         ?? 0;
 
     // Empty portfolio — no assets yet
     if (userPortfolio.userAssets.length === 0) {
@@ -645,12 +652,15 @@ async function generatePortfolioReport(
         userPortfolioId,
         reportDate,
         totalCostPrice:       0,
-        totalCloseValue:      0,
-        totalLossGain:        0,
-        totalPercentage:      0,
+        totalCloseValue:     0,
+        totalLossGain:       0,
+        totalPercentage:     0,
         totalFees,
-        netAssetValue:        walletBalance - totalFees,
-        assetBreakdown:       [],
+        netAssetValue:       walletBalance - totalFees,
+        bankCost,
+        transactionCost,
+        cashAtBank,
+        assetBreakdown:      [],
         subPortfolioSnapshots: [],
       };
     }
@@ -681,9 +691,27 @@ async function generatePortfolioReport(
         assetClass,
         holdings:       data.holdings,
         totalCashValue: data.totalCashValue,
-        percentage:     totalCloseValue > 0 ? (data.totalCashValue / totalCloseValue) * 100 : 0,
+        percentage:     totalCloseValue > 0 ? (data.totalCashValue / (totalCloseValue + cashAtBank)) * 100 : 0,
       })
     );
+
+    // Set CASH class to actual cash at bank value
+    const cashIndex = assetBreakdown.findIndex((a) => a.assetClass === "CASH");
+    if (cashIndex >= 0) {
+      assetBreakdown[cashIndex].totalCashValue = cashAtBank;
+      assetBreakdown[cashIndex].percentage = (totalCloseValue + cashAtBank) > 0 
+        ? (cashAtBank / (totalCloseValue + cashAtBank)) * 100 
+        : 0;
+      assetBreakdown[cashIndex].holdings = cashAtBank > 0 ? 1 : 0;
+    }
+
+    // Recalculate total value including cash
+    const totalWithCash = totalCloseValue + cashAtBank;
+    assetBreakdown.forEach((a) => {
+      if (a.assetClass !== "CASH" && totalWithCash > 0) {
+        a.percentage = (a.totalCashValue / totalWithCash) * 100;
+      }
+    });
 
     const totalPercentage = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
     // NAV = final merged close value minus all accumulated fees
@@ -712,6 +740,9 @@ async function generatePortfolioReport(
       totalPercentage,
       totalFees,
       netAssetValue,
+      bankCost,
+      transactionCost,
+      cashAtBank,
       assetBreakdown,
       subPortfolioSnapshots,
     };
@@ -726,13 +757,16 @@ async function savePortfolioReport(report: GeneratedReport): Promise<string | nu
     const saved = await db.userPortfolioPerformanceReport.create({
       data: {
         userPortfolioId: report.userPortfolioId,
-        reportDate:      report.reportDate,
-        totalCostPrice:  report.totalCostPrice,
-        totalCloseValue: report.totalCloseValue,
-        totalLossGain:   report.totalLossGain,
-        totalPercentage: report.totalPercentage,
-        totalFees:       report.totalFees,
-        netAssetValue:   report.netAssetValue,
+        reportDate:       report.reportDate,
+        totalCostPrice:   report.totalCostPrice,
+        totalCloseValue:  report.totalCloseValue,
+        totalLossGain:    report.totalLossGain,
+        totalPercentage:  report.totalPercentage,
+        totalFees:        report.totalFees,
+        netAssetValue:    report.netAssetValue,
+        bankCost:        report.bankCost,
+        transactionCost:  report.transactionCost,
+        cashAtBank:      report.cashAtBank,
         assetBreakdown: {
           create: report.assetBreakdown.map((b) => ({
             assetClass:     b.assetClass,
