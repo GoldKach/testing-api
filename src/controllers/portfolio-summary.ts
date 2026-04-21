@@ -32,7 +32,7 @@ export async function getPortfolioSummary(req: Request, res: Response) {
         },
       }),
       db.userPortfolio.findMany({
-        where:   { userId, isActive: true },
+        where:   { userId },
         orderBy: { createdAt: "asc" },
         include: {
           portfolio: { select: { id: true, name: true, riskTolerance: true, timeHorizon: true } },

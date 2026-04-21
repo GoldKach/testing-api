@@ -341,6 +341,35 @@ export async function getMyCompanyOnboarding(req: Request, res: Response) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /onboarding/company/user/:userId
+// Admin: Returns CompanyOnboarding record for a specific user.
+// ---------------------------------------------------------------------------
+export async function getCompanyOnboardingByUserId(req: Request, res: Response) {
+  const { userId } = req.params;
+  try {
+    const record = await db.companyOnboarding.findUnique({
+      where: { userId },
+      include: {
+        directors: true,
+        ubos: true,
+        agent: {
+          select: {
+            id: true,
+            position: true,
+            user: { select: { name: true, email: true, imageUrl: true } },
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({ ok: true, data: record || null });
+  } catch (e) {
+    console.error("getCompanyOnboardingByUserId error:", e);
+    return res.status(500).json({ error: "Failed to load company onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // PUT /onboarding/company/directors
 // Replaces the director list for the authenticated user's company onboarding.
 // Body: { directors: Director[] }
@@ -518,5 +547,75 @@ export async function approveCompanyOnboarding(req: Request, res: Response) {
   } catch (e) {
     console.error("approveCompanyOnboarding error:", e);
     return res.status(500).json({ error: "Failed to approve onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/company/:id
+// Admin: Update company onboarding record fields.
+// ---------------------------------------------------------------------------
+export async function updateCompanyOnboarding(req: Request, res: Response) {
+  const { id } = req.params;
+  const payload = req.body as Record<string, any>;
+
+  try {
+    const existing = await db.companyOnboarding.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Company onboarding record not found." });
+
+    const updateData: Prisma.CompanyOnboardingUpdateInput = {};
+
+    const stringFields = [
+      "companyName", "email", "companyAddress", "businessType",
+      "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
+      "investmentExperience", "sourceOfIncome", "expectedInvestment",
+      "sanctionsOrLegal"
+    ];
+
+    const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms"];
+
+    const dateFields = ["incorporationDate"];
+
+    const documentFields = [
+      "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
+      "bankStatementUrl", "tinCertificateUrl", "logoDocUrl", "additionalDocumentUrl"
+    ];
+
+    for (const field of stringFields) {
+      if (payload[field] !== undefined) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+
+    for (const field of booleanFields) {
+      if (payload[field] !== undefined) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+
+    for (const field of dateFields) {
+      if (payload[field]) {
+        (updateData as any)[field] = new Date(payload[field]);
+      }
+    }
+
+    for (const field of documentFields) {
+      if (payload[field] !== undefined) {
+        if (payload[field] === "") {
+          (updateData as any)[field] = null;
+        } else if (payload[field]) {
+          (updateData as any)[field] = payload[field];
+        }
+      }
+    }
+
+    const updated = await db.companyOnboarding.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("updateCompanyOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }

@@ -270,6 +270,35 @@ export async function getMyIndividualOnboarding(req: Request, res: Response) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /onboarding/individual/user/:userId
+// Admin: Returns IndividualOnboarding record for a specific user.
+// ---------------------------------------------------------------------------
+export async function getIndividualOnboardingByUserId(req: Request, res: Response) {
+  const { userId } = req.params;
+  try {
+    const record = await db.individualOnboarding.findUnique({
+      where: { userId },
+      include: {
+        beneficiaries: true,
+        nextOfKin: true,
+        agent: {
+          select: {
+            id: true,
+            position: true,
+            user: { select: { name: true, email: true, imageUrl: true } },
+          },
+        },
+      },
+    });
+
+    return res.status(200).json({ ok: true, data: record || null });
+  } catch (e) {
+    console.error("getIndividualOnboardingByUserId error:", e);
+    return res.status(500).json({ error: "Failed to load individual onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // POST /onboarding/validate-tin
 // Body: { tin: string; userId?: string }
 // Checks across BOTH individual and company onboarding tables.
@@ -322,5 +351,77 @@ export async function approveIndividualOnboarding(req: Request, res: Response) {
   } catch (e) {
     console.error("approveIndividualOnboarding error:", e);
     return res.status(500).json({ error: "Failed to approve onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/individual/:id
+// Admin: Update individual onboarding record fields.
+// ---------------------------------------------------------------------------
+export async function updateIndividualOnboarding(req: Request, res: Response) {
+  const { id } = req.params;
+  const payload = req.body as Record<string, any>;
+
+  try {
+    const existing = await db.individualOnboarding.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: "Individual onboarding record not found." });
+
+    const updateData: Prisma.IndividualOnboardingUpdateInput = {};
+
+    const stringFields = [
+      "fullName", "email", "phoneNumber", "homeAddress", "nationality",
+      "countryOfResidence", "employmentStatus", "occupation", "companyName",
+      "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
+      "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
+      "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal"
+    ];
+
+    const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms"];
+
+    const dateFields = ["dateOfBirth", "incorporationDate"];
+
+    const documentFields = [
+      "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
+      "bankStatementUrl", "proofOfAddressUrl", "additionalDocumentUrl"
+    ];
+
+    for (const field of stringFields) {
+      if (payload[field] !== undefined) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+
+    for (const field of booleanFields) {
+      if (payload[field] !== undefined) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+
+    for (const field of dateFields) {
+      if (payload[field]) {
+        (updateData as any)[field] = new Date(payload[field]);
+      }
+    }
+
+    for (const field of documentFields) {
+      if (payload[field] !== undefined) {
+        if (payload[field] === "") {
+          (updateData as any)[field] = null;
+        } else if (payload[field]) {
+          (updateData as any)[field] = payload[field];
+        }
+      }
+    }
+
+    const updated = await db.individualOnboarding.update({
+      where: { id },
+      data: updateData,
+      include: { beneficiaries: true, nextOfKin: true },
+    });
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("updateIndividualOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }
