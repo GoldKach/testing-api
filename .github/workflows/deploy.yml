@@ -53,7 +53,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /opt/goldkach
+            cd /var/www/investment-platform
             echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             sed -i 's|investment-api:v[0-9]*|investment-api:${{ needs.build-push.outputs.tag }}|g' docker-compose.yml
             docker compose pull api
