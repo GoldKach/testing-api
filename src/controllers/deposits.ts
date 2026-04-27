@@ -419,10 +419,10 @@ export async function createDeposit(req: Request, res: Response) {
       ? `${masterWallet.accountNumber}-${Date.now()}`
       : referenceNo ?? `DEP-${Date.now()}`;
 
-    // Parse fee fields (only meaningful on first MASTER deposit)
-    const fBankCost        = isFirstDeposit ? num(bankCost, 0) : 0;
-    const fTransactionCost = isFirstDeposit ? num(transactionCost, 0) : 0;
-    const fCashAtBank      = isFirstDeposit ? num(cashAtBank, 0) : 0;
+    // Parse fee fields (apply on every MASTER deposit, not just first)
+    const fBankCost        = target === "MASTER" ? num(bankCost, 0) : 0;
+    const fTransactionCost = target === "MASTER" ? num(transactionCost, 0) : 0;
+    const fCashAtBank      = target === "MASTER" ? num(cashAtBank, 0) : 0;
     const fTotalFees       = fBankCost + fTransactionCost + fCashAtBank;
 
     const created = await db.deposit.create({
@@ -580,15 +580,18 @@ export async function approveDeposit(req: Request, res: Response) {
 
       if (existing.depositTarget === "MASTER") {
         // External deposit → land in master wallet cash balance
-        // On first deposit: deduct one-time fees from the credited amount
-        const netAmount = existing.amount - (existing.totalFees ?? 0);
+        // Deduct fees from the credited amount on every deposit
+        const depositFees = existing.totalFees ?? 0;
+        const netAmount = existing.amount - depositFees;
+        
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data: {
             balance:        { increment: netAmount > 0 ? netAmount : existing.amount },
             totalDeposited: { increment: existing.amount },
-            ...(existing.isFirstDeposit && existing.totalFees > 0
-              ? { totalFees: existing.totalFees }
+            // Accumulate fees on every deposit (not just first deposit)
+            ...(depositFees > 0
+              ? { totalFees: { increment: depositFees } }
               : {}),
           },
         });
@@ -695,12 +698,17 @@ export async function reverseDeposit(req: Request, res: Response) {
       });
 
       if (existing.depositTarget === "MASTER") {
-        // Undo the master wallet cash credit
+        // Undo the master wallet cash credit and accumulated fees
+        const netAmount = existing.amount - (existing.totalFees ?? 0);
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data: {
-            balance:        { decrement: existing.amount },
+            balance:        { decrement: netAmount > 0 ? netAmount : existing.amount },
             totalDeposited: { decrement: existing.amount },
+            // Reverse the accumulated fees
+            ...(existing.totalFees > 0
+              ? { totalFees: { decrement: existing.totalFees } }
+              : {}),
           },
         });
       } else {
