@@ -25,7 +25,6 @@ import migrationsRouter       from "./routes/migrations";
 import sendEmailRouter        from "./routes/send-email";
 
 import { startPortfolioReportCronFromEnv } from "./jobs/portfolio-report-cron";
-import { startInactiveUserDeactivationCronFromEnv } from "./jobs/inactive-user-deactivation-cron";
 
 import subPortfoliosRouter from "./routes/subportfolios";
 
@@ -40,7 +39,6 @@ const PORT = Number(process.env.PORT) || 8000;
 
 app.listen(PORT, "0.0.0.0", () => {
   startPortfolioReportCronFromEnv();
-  startInactiveUserDeactivationCronFromEnv();
   console.log(`Server is running on http://localhost:${PORT}`);
 });
 
