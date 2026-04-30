@@ -438,7 +438,12 @@ export async function loginUser(req: Request, res: Response) {
 ============================= */
 export async function getAllUsers(req: AuthRequest, res: Response) {
   try {
+    const { role } = req.query as { role?: string };
+
+    const where = role && isValidRole(role) ? { role: role as UserRole } : {};
+
     const users = await db.user.findMany({
+      where,
       orderBy: { createdAt: "desc" },
       select: {
         ...userDetailSelect,
