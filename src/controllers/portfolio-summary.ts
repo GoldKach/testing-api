@@ -27,6 +27,7 @@ export async function getPortfolioSummary(req: Request, res: Response) {
         where: { userId },
         select: {
           id: true, accountNumber: true,
+          balance: true,
           totalDeposited: true, totalWithdrawn: true,
           totalFees: true, netAssetValue: true, status: true,
         },
