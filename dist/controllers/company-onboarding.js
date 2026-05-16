@@ -11,11 +11,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.submitCompanyOnboarding = submitCompanyOnboarding;
 exports.getMyCompanyOnboarding = getMyCompanyOnboarding;
+exports.getCompanyOnboardingByUserId = getCompanyOnboardingByUserId;
 exports.updateCompanyDirectors = updateCompanyDirectors;
 exports.updateCompanyUBOs = updateCompanyUBOs;
 exports.getCompanyDirectors = getCompanyDirectors;
 exports.getCompanyUBOs = getCompanyUBOs;
 exports.approveCompanyOnboarding = approveCompanyOnboarding;
+exports.updateCompanyOnboarding = updateCompanyOnboarding;
 const db_1 = require("../db/db");
 function getUserId(req) {
     var _a;
@@ -281,6 +283,32 @@ function getMyCompanyOnboarding(req, res) {
         }
     });
 }
+function getCompanyOnboardingByUserId(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { userId } = req.params;
+        try {
+            const record = yield db_1.db.companyOnboarding.findUnique({
+                where: { userId },
+                include: {
+                    directors: true,
+                    ubos: true,
+                    agent: {
+                        select: {
+                            id: true,
+                            position: true,
+                            user: { select: { name: true, email: true, imageUrl: true } },
+                        },
+                    },
+                },
+            });
+            return res.status(200).json({ ok: true, data: record || null });
+        }
+        catch (e) {
+            console.error("getCompanyOnboardingByUserId error:", e);
+            return res.status(500).json({ error: "Failed to load company onboarding." });
+        }
+    });
+}
 function updateCompanyDirectors(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -448,6 +476,64 @@ function approveCompanyOnboarding(req, res) {
         catch (e) {
             console.error("approveCompanyOnboarding error:", e);
             return res.status(500).json({ error: "Failed to approve onboarding." });
+        }
+    });
+}
+function updateCompanyOnboarding(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        const payload = req.body;
+        try {
+            const existing = yield db_1.db.companyOnboarding.findUnique({ where: { id } });
+            if (!existing)
+                return res.status(404).json({ error: "Company onboarding record not found." });
+            const updateData = {};
+            const stringFields = [
+                "companyName", "email", "companyAddress", "businessType",
+                "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
+                "investmentExperience", "sourceOfIncome", "expectedInvestment",
+                "sanctionsOrLegal"
+            ];
+            const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms"];
+            const dateFields = ["incorporationDate"];
+            const documentFields = [
+                "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
+                "bankStatementUrl", "tinCertificateUrl", "logoDocUrl", "additionalDocumentUrl"
+            ];
+            for (const field of stringFields) {
+                if (payload[field] !== undefined) {
+                    updateData[field] = payload[field];
+                }
+            }
+            for (const field of booleanFields) {
+                if (payload[field] !== undefined) {
+                    updateData[field] = payload[field];
+                }
+            }
+            for (const field of dateFields) {
+                if (payload[field]) {
+                    updateData[field] = new Date(payload[field]);
+                }
+            }
+            for (const field of documentFields) {
+                if (payload[field] !== undefined) {
+                    if (payload[field] === "") {
+                        updateData[field] = null;
+                    }
+                    else if (payload[field]) {
+                        updateData[field] = payload[field];
+                    }
+                }
+            }
+            const updated = yield db_1.db.companyOnboarding.update({
+                where: { id },
+                data: updateData,
+            });
+            return res.status(200).json({ ok: true, data: updated });
+        }
+        catch (e) {
+            console.error("updateCompanyOnboarding error:", e);
+            return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });
 }

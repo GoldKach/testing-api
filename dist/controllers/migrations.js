@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.backfillPortfoliosToNewStructure = backfillPortfoliosToNewStructure;
+exports.reactivateAllUsers = reactivateAllUsers;
 const db_1 = require("../db/db");
 const crypto_1 = require("crypto");
 function generateAccountNumber(prefix) {
@@ -239,6 +240,49 @@ function backfillPortfoliosToNewStructure(req, res) {
         catch (err) {
             console.error("backfillPortfoliosToNewStructure error:", err);
             return res.status(500).json({ data: null, error: "Migration failed: " + err.message });
+        }
+    });
+}
+function reactivateAllUsers(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const usersResult = yield db_1.db.user.updateMany({
+                where: {
+                    status: { in: ["DEACTIVATED", "INACTIVE", "SUSPENDED"] },
+                },
+                data: {
+                    status: "ACTIVE",
+                    zeroBalanceStartedAt: null,
+                    zeroBalanceWarningSentAt: null,
+                },
+            });
+            const masterWalletsResult = yield db_1.db.masterWallet.updateMany({
+                where: { status: { in: ["INACTIVE", "FROZEN", "CLOSED"] } },
+                data: { status: "ACTIVE" },
+            });
+            const portfolioWalletsResult = yield db_1.db.portfolioWallet.updateMany({
+                where: { status: { in: ["INACTIVE", "FROZEN", "CLOSED"] } },
+                data: { status: "ACTIVE" },
+            });
+            console.log("============================================================");
+            console.log("✅ REACTIVATE ALL USERS MIGRATION COMPLETE");
+            console.log(`   Users reactivated         : ${usersResult.count}`);
+            console.log(`   Master wallets reactivated : ${masterWalletsResult.count}`);
+            console.log(`   Portfolio wallets reactivated: ${portfolioWalletsResult.count}`);
+            console.log("============================================================");
+            return res.status(200).json({
+                data: {
+                    usersReactivated: usersResult.count,
+                    masterWalletsReactivated: masterWalletsResult.count,
+                    portfolioWalletsReactivated: portfolioWalletsResult.count,
+                },
+                error: null,
+                message: `Reactivated ${usersResult.count} user(s), ${masterWalletsResult.count} master wallet(s), ${portfolioWalletsResult.count} portfolio wallet(s).`,
+            });
+        }
+        catch (err) {
+            console.error("reactivateAllUsers error:", err);
+            return res.status(500).json({ data: null, error: "Reactivation failed: " + err.message });
         }
     });
 }

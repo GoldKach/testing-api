@@ -11,8 +11,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.submitIndividualOnboarding = submitIndividualOnboarding;
 exports.getMyIndividualOnboarding = getMyIndividualOnboarding;
+exports.getIndividualOnboardingByUserId = getIndividualOnboardingByUserId;
 exports.validateTin = validateTin;
 exports.approveIndividualOnboarding = approveIndividualOnboarding;
+exports.updateIndividualOnboarding = updateIndividualOnboarding;
 const db_1 = require("../db/db");
 function getUserId(req) {
     var _a;
@@ -232,6 +234,32 @@ function getMyIndividualOnboarding(req, res) {
         }
     });
 }
+function getIndividualOnboardingByUserId(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { userId } = req.params;
+        try {
+            const record = yield db_1.db.individualOnboarding.findUnique({
+                where: { userId },
+                include: {
+                    beneficiaries: true,
+                    nextOfKin: true,
+                    agent: {
+                        select: {
+                            id: true,
+                            position: true,
+                            user: { select: { name: true, email: true, imageUrl: true } },
+                        },
+                    },
+                },
+            });
+            return res.status(200).json({ ok: true, data: record || null });
+        }
+        catch (e) {
+            console.error("getIndividualOnboardingByUserId error:", e);
+            return res.status(500).json({ error: "Failed to load individual onboarding." });
+        }
+    });
+}
 function validateTin(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -277,6 +305,66 @@ function approveIndividualOnboarding(req, res) {
         catch (e) {
             console.error("approveIndividualOnboarding error:", e);
             return res.status(500).json({ error: "Failed to approve onboarding." });
+        }
+    });
+}
+function updateIndividualOnboarding(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        const payload = req.body;
+        try {
+            const existing = yield db_1.db.individualOnboarding.findUnique({ where: { id } });
+            if (!existing)
+                return res.status(404).json({ error: "Individual onboarding record not found." });
+            const updateData = {};
+            const stringFields = [
+                "fullName", "email", "phoneNumber", "homeAddress", "nationality",
+                "countryOfResidence", "employmentStatus", "occupation", "companyName",
+                "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
+                "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
+                "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal"
+            ];
+            const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms"];
+            const dateFields = ["dateOfBirth", "incorporationDate"];
+            const documentFields = [
+                "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
+                "bankStatementUrl", "proofOfAddressUrl", "additionalDocumentUrl"
+            ];
+            for (const field of stringFields) {
+                if (payload[field] !== undefined) {
+                    updateData[field] = payload[field];
+                }
+            }
+            for (const field of booleanFields) {
+                if (payload[field] !== undefined) {
+                    updateData[field] = payload[field];
+                }
+            }
+            for (const field of dateFields) {
+                if (payload[field]) {
+                    updateData[field] = new Date(payload[field]);
+                }
+            }
+            for (const field of documentFields) {
+                if (payload[field] !== undefined) {
+                    if (payload[field] === "") {
+                        updateData[field] = null;
+                    }
+                    else if (payload[field]) {
+                        updateData[field] = payload[field];
+                    }
+                }
+            }
+            const updated = yield db_1.db.individualOnboarding.update({
+                where: { id },
+                data: updateData,
+                include: { beneficiaries: true, nextOfKin: true },
+            });
+            return res.status(200).json({ ok: true, data: updated });
+        }
+        catch (e) {
+            console.error("updateIndividualOnboarding error:", e);
+            return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });
 }

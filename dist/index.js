@@ -24,8 +24,6 @@ const portfolio_summary_1 = __importDefault(require("./routes/portfolio-summary"
 const migrations_1 = __importDefault(require("./routes/migrations"));
 const send_email_1 = __importDefault(require("./routes/send-email"));
 const portfolio_report_cron_1 = require("./jobs/portfolio-report-cron");
-const inactive_user_deactivation_cron_1 = require("./jobs/inactive-user-deactivation-cron");
-const zero_balance_deactivation_cron_1 = require("./jobs/zero-balance-deactivation-cron");
 const subportfolios_1 = __importDefault(require("./routes/subportfolios"));
 const cors = require("cors");
 const app = (0, express_1.default)();
@@ -34,8 +32,6 @@ app.use(express_1.default.json());
 const PORT = Number(process.env.PORT) || 8000;
 app.listen(PORT, "0.0.0.0", () => {
     (0, portfolio_report_cron_1.startPortfolioReportCronFromEnv)();
-    (0, inactive_user_deactivation_cron_1.startInactiveUserDeactivationCronFromEnv)();
-    (0, zero_balance_deactivation_cron_1.startZeroBalanceDeactivationCronFromEnv)();
     console.log(`Server is running on http://localhost:${PORT}`);
 });
 app.get("/health", (_req, res) => {

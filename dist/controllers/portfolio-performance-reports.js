@@ -80,6 +80,7 @@ function generatePortfolioReport(userPortfolioId_1) {
                     cashAtBank,
                     assetBreakdown: [],
                     subPortfolioSnapshots: [],
+                    assetSnapshots: [],
                 };
             }
             let totalCostPrice = 0;
@@ -130,6 +131,20 @@ function generatePortfolioReport(userPortfolioId_1) {
                 totalFees: sub.totalFees,
                 cashAtBank: sub.cashAtBank,
             }));
+            const assetSnapshots = userPortfolio.userAssets.map((ua) => {
+                var _a, _b, _c, _d, _e, _f, _g, _h;
+                return ({
+                    assetId: ua.assetId,
+                    symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : "",
+                    description: (_b = ua.asset.description) !== null && _b !== void 0 ? _b : "",
+                    stock: (_c = ua.stock) !== null && _c !== void 0 ? _c : 0,
+                    costPerShare: (_d = ua.costPerShare) !== null && _d !== void 0 ? _d : 0,
+                    costPrice: (_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0,
+                    closePrice: (_f = ua.asset.closePrice) !== null && _f !== void 0 ? _f : 0,
+                    closeValue: (_g = ua.closeValue) !== null && _g !== void 0 ? _g : 0,
+                    lossGain: (_h = ua.lossGain) !== null && _h !== void 0 ? _h : 0,
+                });
+            });
             return {
                 userPortfolioId,
                 reportDate,
@@ -144,6 +159,7 @@ function generatePortfolioReport(userPortfolioId_1) {
                 cashAtBank,
                 assetBreakdown,
                 subPortfolioSnapshots,
+                assetSnapshots,
             };
         }
         catch (error) {
@@ -187,6 +203,19 @@ function savePortfolioReport(report) {
                             totalLossGain: s.totalLossGain,
                             totalFees: s.totalFees,
                             cashAtBank: s.cashAtBank,
+                        })),
+                    },
+                    assetSnapshots: {
+                        create: report.assetSnapshots.map((a) => ({
+                            assetId: a.assetId,
+                            symbol: a.symbol,
+                            description: a.description,
+                            stock: a.stock,
+                            costPerShare: a.costPerShare,
+                            costPrice: a.costPrice,
+                            closePrice: a.closePrice,
+                            closeValue: a.closeValue,
+                            lossGain: a.lossGain,
                         })),
                     },
                 },
@@ -255,6 +284,7 @@ function generateDailyReportsForAllPortfolios() {
 const REPORT_INCLUDE = {
     assetBreakdown: { orderBy: { assetClass: "asc" } },
     subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+    assetSnapshots: true,
 };
 function generatePerformanceReport(req, res) {
     return __awaiter(this, void 0, void 0, function* () {

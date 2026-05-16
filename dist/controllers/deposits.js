@@ -314,9 +314,9 @@ function createDeposit(req, res) {
             const autoRefNo = (masterWallet === null || masterWallet === void 0 ? void 0 : masterWallet.accountNumber)
                 ? `${masterWallet.accountNumber}-${Date.now()}`
                 : referenceNo !== null && referenceNo !== void 0 ? referenceNo : `DEP-${Date.now()}`;
-            const fBankCost = isFirstDeposit ? num(bankCost, 0) : 0;
-            const fTransactionCost = isFirstDeposit ? num(transactionCost, 0) : 0;
-            const fCashAtBank = isFirstDeposit ? num(cashAtBank, 0) : 0;
+            const fBankCost = target === "MASTER" ? num(bankCost, 0) : 0;
+            const fTransactionCost = target === "MASTER" ? num(transactionCost, 0) : 0;
+            const fCashAtBank = target === "MASTER" ? num(cashAtBank, 0) : 0;
             const fTotalFees = fBankCost + fTransactionCost + fCashAtBank;
             const created = yield db_1.db.deposit.create({
                 data: {
@@ -446,11 +446,12 @@ function approveDeposit(req, res) {
                     },
                 });
                 if (existing.depositTarget === "MASTER") {
-                    const netAmount = existing.amount - ((_b = existing.totalFees) !== null && _b !== void 0 ? _b : 0);
+                    const depositFees = (_b = existing.totalFees) !== null && _b !== void 0 ? _b : 0;
+                    const netAmount = existing.amount - depositFees;
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
-                        data: Object.assign({ balance: { increment: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { increment: existing.amount } }, (existing.isFirstDeposit && existing.totalFees > 0
-                            ? { totalFees: existing.totalFees }
+                        data: Object.assign({ balance: { increment: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { increment: existing.amount } }, (depositFees > 0
+                            ? { totalFees: { increment: depositFees } }
                             : {})),
                     });
                 }
@@ -526,6 +527,7 @@ function reverseDeposit(req, res) {
                 return res.status(409).json({ data: null, error: "Deposit is still PENDING. Use reject instead." });
             }
             const reversed = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+                var _a;
                 const row = yield tx.deposit.update({
                     where: { id },
                     data: {
@@ -537,12 +539,12 @@ function reverseDeposit(req, res) {
                     },
                 });
                 if (existing.depositTarget === "MASTER") {
+                    const netAmount = existing.amount - ((_a = existing.totalFees) !== null && _a !== void 0 ? _a : 0);
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
-                        data: {
-                            balance: { decrement: existing.amount },
-                            totalDeposited: { decrement: existing.amount },
-                        },
+                        data: Object.assign({ balance: { decrement: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { decrement: existing.amount } }, (existing.totalFees > 0
+                            ? { totalFees: { decrement: existing.totalFees } }
+                            : {})),
                     });
                 }
                 else {

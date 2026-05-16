@@ -564,6 +564,18 @@ interface SubPortfolioSnapshot {
   cashAtBank:      number;
 }
 
+interface AssetSnapshot {
+  assetId:     string;
+  symbol:      string;
+  description: string;
+  stock:       number;
+  costPerShare: number;
+  costPrice:   number;
+  closePrice:  number;
+  closeValue:  number;
+  lossGain:    number;
+}
+
 interface GeneratedReport {
   userPortfolioId:      string;
   reportDate:           Date;
@@ -578,6 +590,7 @@ interface GeneratedReport {
   cashAtBank:           number;
   assetBreakdown:       AssetBreakdown[];
   subPortfolioSnapshots: SubPortfolioSnapshot[];
+  assetSnapshots:       AssetSnapshot[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -662,6 +675,7 @@ async function generatePortfolioReport(
         cashAtBank,
         assetBreakdown:      [],
         subPortfolioSnapshots: [],
+        assetSnapshots:      [],
       };
     }
 
@@ -731,6 +745,19 @@ async function generatePortfolioReport(
       cashAtBank:      sub.cashAtBank,
     }));
 
+    // ── Per-asset snapshot: capture closePrice at this exact report date ──
+    const assetSnapshots: AssetSnapshot[] = userPortfolio.userAssets.map((ua) => ({
+      assetId:     ua.assetId,
+      symbol:      ua.asset.symbol      ?? "",
+      description: ua.asset.description ?? "",
+      stock:       ua.stock       ?? 0,
+      costPerShare: ua.costPerShare ?? 0,
+      costPrice:   ua.costPrice   ?? 0,
+      closePrice:  ua.asset.closePrice ?? 0,  // live closePrice at generation time
+      closeValue:  ua.closeValue  ?? 0,
+      lossGain:    ua.lossGain    ?? 0,
+    }));
+
     return {
       userPortfolioId,
       reportDate,
@@ -745,6 +772,7 @@ async function generatePortfolioReport(
       cashAtBank,
       assetBreakdown,
       subPortfolioSnapshots,
+      assetSnapshots,
     };
   } catch (error) {
     console.error("Error generating portfolio report:", error);
@@ -786,6 +814,19 @@ async function savePortfolioReport(report: GeneratedReport): Promise<string | nu
             totalLossGain:   s.totalLossGain,
             totalFees:       s.totalFees,
             cashAtBank:      s.cashAtBank,
+          })),
+        },
+        assetSnapshots: {
+          create: report.assetSnapshots.map((a) => ({
+            assetId:     a.assetId,
+            symbol:      a.symbol,
+            description: a.description,
+            stock:       a.stock,
+            costPerShare: a.costPerShare,
+            costPrice:   a.costPrice,
+            closePrice:  a.closePrice,
+            closeValue:  a.closeValue,
+            lossGain:    a.lossGain,
           })),
         },
       },
@@ -862,6 +903,7 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
 const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
   assetBreakdown:        { orderBy: { assetClass: "asc" } },
   subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+  assetSnapshots:        true,
 };
 
 /* ------------------------------------------------------------------ */

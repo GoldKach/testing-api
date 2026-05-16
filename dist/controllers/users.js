@@ -419,7 +419,10 @@ function loginUser(req, res) {
 function getAllUsers(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
+            const { role } = req.query;
+            const where = role && isValidRole(role) ? { role: role } : {};
             const users = yield db_1.db.user.findMany({
+                where,
                 orderBy: { createdAt: "desc" },
                 select: Object.assign(Object.assign({}, userDetailSelect), { accounts: true, activityLogs: { orderBy: { createdAt: "desc" }, take: 20 } }),
             });

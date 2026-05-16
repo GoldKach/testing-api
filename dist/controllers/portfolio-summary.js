@@ -27,12 +27,13 @@ function getPortfolioSummary(req, res) {
                     where: { userId },
                     select: {
                         id: true, accountNumber: true,
+                        balance: true,
                         totalDeposited: true, totalWithdrawn: true,
                         totalFees: true, netAssetValue: true, status: true,
                     },
                 }),
                 db_1.db.userPortfolio.findMany({
-                    where: { userId, isActive: true },
+                    where: { userId },
                     orderBy: { createdAt: "asc" },
                     include: {
                         portfolio: { select: { id: true, name: true, riskTolerance: true, timeHorizon: true } },

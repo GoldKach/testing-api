@@ -796,12 +796,38 @@ model UserPortfolioPerformanceReport {
   // Sub-portfolio breakdown for full drill-down in reports
   subPortfolioSnapshots SubPortfolioReportSnapshot[]
 
+  // Per-asset historical snapshot — stores closePrice at report generation time
+  assetSnapshots UserPortfolioAssetSnapshot[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userPortfolioId, reportDate])
   @@index([reportDate])
   @@index([userPortfolioId, period, reportDate])
+}
+
+// Historical per-asset values captured at the time a performance report is generated.
+// This is the source of truth for historical close prices in AUM reports.
+model UserPortfolioAssetSnapshot {
+  id       String                         @id @default(cuid())
+  reportId String
+  report   UserPortfolioPerformanceReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  assetId     String
+  symbol      String
+  description String @default("")
+
+  stock        Float @default(0)
+  costPerShare Float @default(0)
+  costPrice    Float @default(0)
+  closePrice   Float @default(0)  // historical close price at report date
+  closeValue   Float @default(0)
+  lossGain     Float @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([reportId])
 }
 
 model PortfolioAssetBreakdown {
