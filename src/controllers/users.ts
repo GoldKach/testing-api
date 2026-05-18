@@ -35,12 +35,15 @@ const userPortfolioSelect = {
   // PortfolioWallet (one per UserPortfolio — new schema)
   wallet: {
     select: {
-      id:            true,
-      accountNumber: true,
-      balance:       true,
-      netAssetValue: true,
-      totalFees:     true,
-      status:        true,
+      id:             true,
+      accountNumber:  true,
+      balance:        true,
+      netAssetValue:  true,
+      totalFees:      true,
+      bankFee:        true,
+      transactionFee: true,
+      feeAtBank:      true,
+      status:         true,
     },
   },
   userAssets: {
@@ -148,6 +151,9 @@ const userDetailSelect = {
       rejectedAt:        true,
       rejectReason:      true,
       createdAt:         true,
+      bankCost:          true,
+      transactionCost:   true,
+      cashAtBank:        true,
     },
   },
   withdrawals: {

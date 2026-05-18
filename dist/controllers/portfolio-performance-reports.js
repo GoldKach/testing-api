@@ -19,6 +19,7 @@ exports.getPerformanceReportById = getPerformanceReportById;
 exports.getPerformanceStatistics = getPerformanceStatistics;
 exports.cleanupPerformanceReports = cleanupPerformanceReports;
 exports.generateDailyReportsForUser = generateDailyReportsForUser;
+exports.backfillAssetSnapshots = backfillAssetSnapshots;
 const db_1 = require("../db/db");
 function determineAssetClass(asset) {
     var _a, _b, _c;
@@ -574,5 +575,81 @@ function generateDailyReportsForUser(userId) {
             }
         }
         return { total: portfolios.length, success, skipped, failed, errors };
+    });
+}
+function backfillAssetSnapshots(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const reports = yield db_1.db.userPortfolioPerformanceReport.findMany({
+                where: { assetSnapshots: { none: {} } },
+                include: {
+                    userPortfolio: {
+                        include: {
+                            userAssets: {
+                                include: { asset: { select: { id: true, symbol: true, description: true } } },
+                            },
+                        },
+                    },
+                },
+            });
+            if (reports.length === 0) {
+                return res.status(200).json({
+                    data: { backfilled: 0 },
+                    message: "All reports already have asset snapshots.",
+                    error: null,
+                });
+            }
+            let backfilled = 0;
+            let failed = 0;
+            for (const report of reports) {
+                try {
+                    const assets = report.userPortfolio.userAssets;
+                    if (assets.length === 0)
+                        continue;
+                    const currentTotalCloseValue = assets.reduce((s, a) => { var _a; return s + ((_a = a.closeValue) !== null && _a !== void 0 ? _a : 0); }, 0);
+                    const scale = currentTotalCloseValue > 0
+                        ? report.totalCloseValue / currentTotalCloseValue
+                        : 1;
+                    yield db_1.db.userPortfolioAssetSnapshot.createMany({
+                        data: assets.map((a) => {
+                            var _a, _b, _c, _d, _e, _f, _g, _h;
+                            const scaledCloseValue = ((_a = a.closeValue) !== null && _a !== void 0 ? _a : 0) * scale;
+                            const scaledCostPrice = ((_b = a.costPrice) !== null && _b !== void 0 ? _b : 0) * scale;
+                            const scaledLossGain = scaledCloseValue - scaledCostPrice;
+                            const derivedClosePrice = ((_c = a.stock) !== null && _c !== void 0 ? _c : 0) > 0
+                                ? scaledCloseValue / ((_d = a.stock) !== null && _d !== void 0 ? _d : 1)
+                                : 0;
+                            return {
+                                reportId: report.id,
+                                assetId: a.assetId,
+                                symbol: (_e = a.asset.symbol) !== null && _e !== void 0 ? _e : "",
+                                description: (_f = a.asset.description) !== null && _f !== void 0 ? _f : "",
+                                stock: (_g = a.stock) !== null && _g !== void 0 ? _g : 0,
+                                costPerShare: (_h = a.costPerShare) !== null && _h !== void 0 ? _h : 0,
+                                costPrice: scaledCostPrice,
+                                closePrice: derivedClosePrice,
+                                closeValue: scaledCloseValue,
+                                lossGain: scaledLossGain,
+                            };
+                        }),
+                        skipDuplicates: true,
+                    });
+                    backfilled++;
+                }
+                catch (err) {
+                    console.error(`backfillAssetSnapshots: failed for report ${report.id}:`, err.message);
+                    failed++;
+                }
+            }
+            return res.status(200).json({
+                data: { backfilled, failed, total: reports.length },
+                message: `Backfilled ${backfilled} reports (${failed} failed).`,
+                error: null,
+            });
+        }
+        catch (error) {
+            console.error("backfillAssetSnapshots error:", error);
+            return res.status(500).json({ data: null, error: "Failed to backfill asset snapshots" });
+        }
     });
 }

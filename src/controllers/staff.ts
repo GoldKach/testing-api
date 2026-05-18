@@ -872,7 +872,55 @@ export async function getAgentForClient(req: Request, res: Response) {
   }
 }
 
-// src/controllers/staff.ts — add this function
+/* ─────────────────────────────────────────
+   GET PUBLIC AGENT INFO BY STAFF PROFILE ID
+   GET /staff/public/:staffProfileId
+   No auth required — used for referral link landing
+───────────────────────────────────────── */
+export async function getPublicAgentInfo(req: Request, res: Response) {
+  const { staffProfileId } = req.params;
+  try {
+    const profile = await db.staffProfile.findUnique({
+      where: { id: staffProfileId },
+      select: {
+        id: true,
+        position: true,
+        department: true,
+        isActive: true,
+        user: {
+          select: {
+            name: true,
+            firstName: true,
+            lastName: true,
+            imageUrl: true,
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (!profile || !profile.isActive) {
+      return res.status(404).json({ success: false, data: null, error: "Agent not found." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: profile.id,
+        name: profile.user.name,
+        firstName: profile.user.firstName,
+        lastName: profile.user.lastName,
+        imageUrl: profile.user.imageUrl,
+        position: profile.position,
+        department: profile.department,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching public agent info:", error);
+    return res.status(500).json({ success: false, data: null, error: "Server error." });
+  }
+}
+
 export async function hardDeleteStaffMember(req: Request, res: Response) {
   const { id } = req.params;
   try {

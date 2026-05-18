@@ -864,7 +864,7 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
   const errors: string[] = [];
 
   const reportDate = new Date();
-  reportDate.setHours(0, 0, 0, 0);
+  reportDate.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
 
   for (const portfolio of allPortfolios) {
     try {
@@ -927,7 +927,7 @@ export async function generatePerformanceReport(req: Request, res: Response) {
     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
 
     const date = reportDate ? new Date(reportDate) : new Date();
-    date.setHours(0, 0, 0, 0);
+    date.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
 
     const reportId = await generateAndSaveReport(userPortfolioId, date);
     if (!reportId) {
@@ -1050,6 +1050,12 @@ export async function listPerformanceReports(req: Request, res: Response) {
         case "weekly":  start.setDate(now.getDate() - 7);   break;
         case "monthly": start.setMonth(now.getMonth() - 1); break;
       }
+    } else {
+      // Expand the range by 12 hours on each side to handle reports that were stored
+      // with local-timezone midnight (e.g. EAT UTC+3 stores Dec 12 as Dec 11 21:00 UTC).
+      // The front-end find() further narrows to the exact calendar day.
+      start = new Date(start.getTime() - 12 * 60 * 60 * 1000);
+      end.setTime(end.getTime() + 12 * 60 * 60 * 1000);
     }
 
     const reports = await db.userPortfolioPerformanceReport.findMany({
@@ -1204,7 +1210,7 @@ export async function generateDailyReportsForUser(userId: string): Promise<{
   });
 
   const reportDate = new Date();
-  reportDate.setHours(0, 0, 0, 0);
+  reportDate.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
 
   let success = 0, skipped = 0, failed = 0;
   const errors: string[] = [];
@@ -1237,4 +1243,107 @@ export async function generateDailyReportsForUser(userId: string): Promise<{
   }
 
   return { total: portfolios.length, success, skipped, failed, errors };
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/backfill-snapshots              */
+/*  Backfill assetSnapshots for all existing reports that lack them.   */
+/*  Derives historical closePrice = closeValue / stock (exact inverse  */
+/*  of how closeValue was originally computed).                        */
+/* ------------------------------------------------------------------ */
+export async function backfillAssetSnapshots(req: Request, res: Response) {
+  try {
+    const { limit = 200 } = req.body as { limit?: number };
+
+    // Find reports without snapshots, limited to avoid timeout
+    const reports = await db.userPortfolioPerformanceReport.findMany({
+      where: { assetSnapshots: { none: {} } },
+      take: limit,
+      orderBy: { reportDate: "desc" },
+      include: {
+        userPortfolio: {
+          include: {
+            userAssets: {
+              include: { asset: { select: { id: true, symbol: true, description: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    const remaining = await db.userPortfolioPerformanceReport.count({
+      where: { assetSnapshots: { none: {} } },
+    });
+
+    if (reports.length === 0) {
+      return res.status(200).json({
+        data: { backfilled: 0, remaining: 0 },
+        message: "All reports already have asset snapshots.",
+        error: null,
+      });
+    }
+
+    let backfilled = 0;
+    let failed = 0;
+
+    for (const report of reports) {
+      try {
+        const assets = report.userPortfolio.userAssets;
+        if (assets.length === 0) { backfilled++; continue; }
+
+        // Scale each asset's values proportionally to the report's totalCloseValue.
+        // Recovers historical closePrice = closeValue / stock exactly,
+        // since closeValue = stock × closePrice at generation time.
+        const currentTotalCloseValue = assets.reduce((s, a) => s + (a.closeValue ?? 0), 0);
+        const scale = currentTotalCloseValue > 0
+          ? report.totalCloseValue / currentTotalCloseValue
+          : 1;
+
+        await db.userPortfolioAssetSnapshot.createMany({
+          data: assets.map((a) => {
+            const scaledCloseValue  = (a.closeValue ?? 0) * scale;
+            const scaledCostPrice   = (a.costPrice  ?? 0) * scale;
+            const scaledLossGain    = scaledCloseValue - scaledCostPrice;
+            const derivedClosePrice = (a.stock ?? 0) > 0
+              ? scaledCloseValue / (a.stock ?? 1)
+              : 0;
+
+            return {
+              reportId:    report.id,
+              assetId:     a.assetId,
+              symbol:      a.asset.symbol      ?? "",
+              description: a.asset.description ?? "",
+              stock:       a.stock       ?? 0,
+              costPerShare: a.costPerShare ?? 0,
+              costPrice:   scaledCostPrice,
+              closePrice:  derivedClosePrice,
+              closeValue:  scaledCloseValue,
+              lossGain:    scaledLossGain,
+            };
+          }),
+          skipDuplicates: true,
+        });
+
+        backfilled++;
+      } catch (err: any) {
+        console.error(`backfillAssetSnapshots: failed for report ${report.id}:`, err.message);
+        failed++;
+      }
+    }
+
+    const stillRemaining = remaining - backfilled;
+
+    console.log(`✅ Backfill: ${backfilled} done, ${failed} failed, ${stillRemaining} still remaining`);
+
+    return res.status(200).json({
+      data: { backfilled, failed, total: reports.length, remaining: stillRemaining },
+      message: stillRemaining > 0
+        ? `Backfilled ${backfilled} reports. ${stillRemaining} still remaining — call again to continue.`
+        : `All done. Backfilled ${backfilled} reports.`,
+      error: null,
+    });
+  } catch (error) {
+    console.error("backfillAssetSnapshots error:", error);
+    return res.status(500).json({ data: null, error: "Failed to backfill asset snapshots" });
+  }
 }

@@ -224,6 +224,24 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
         });
       }
 
+      // Create or update agent-client assignment when agent selected
+      if (resolvedAgentId) {
+        const existing = await tx.agentClientAssignment.findUnique({
+          where: { clientId: userId },
+          select: { id: true },
+        });
+        if (existing) {
+          await tx.agentClientAssignment.update({
+            where: { id: existing.id },
+            data: { agentId: resolvedAgentId, isActive: true, unassignedAt: null, assignedAt: new Date() },
+          });
+        } else {
+          await tx.agentClientAssignment.create({
+            data: { agentId: resolvedAgentId, clientId: userId, isActive: true },
+          });
+        }
+      }
+
       // Return with relations
       return tx.individualOnboarding.findUnique({
         where: { id: record.id },

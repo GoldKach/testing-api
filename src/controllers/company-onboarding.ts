@@ -183,14 +183,12 @@ export async function submitCompanyOnboarding(req: Request, res: Response) {
     let validAgentId: string | null = null;
     if (payload.agentId) {
       const agentExists = await db.staffProfile.findUnique({
-        where: { userId: payload.agentId },
+        where: { id: payload.agentId },
         select: { id: true },
       });
       if (agentExists) {
         validAgentId = agentExists.id;
       }
-    } else {
-      validAgentId = null;
     }
 
     const onboardingData: Prisma.CompanyOnboardingUncheckedCreateInput = {
@@ -282,6 +280,24 @@ export async function submitCompanyOnboarding(req: Request, res: Response) {
             };
           }),
         });
+      }
+
+      // Create or update agent-client assignment when agent selected
+      if (validAgentId) {
+        const existing = await tx.agentClientAssignment.findUnique({
+          where: { clientId: userId },
+          select: { id: true },
+        });
+        if (existing) {
+          await tx.agentClientAssignment.update({
+            where: { id: existing.id },
+            data: { agentId: validAgentId, isActive: true, unassignedAt: null, assignedAt: new Date() },
+          });
+        } else {
+          await tx.agentClientAssignment.create({
+            data: { agentId: validAgentId, clientId: userId, isActive: true },
+          });
+        }
       }
 
       return record.id;

@@ -6,6 +6,7 @@ import {
   getAgentClients,
   getAgentForClient,
   getAllStaff,
+  getPublicAgentInfo,
   getStaffById,
   hardDeleteStaffMember,
   unassignClientFromAgent,
@@ -34,6 +35,7 @@ staffRouter.get("/", getAllStaff);
 
 // ⚠️ IMPORTANT: static routes before dynamic /:id
 staffRouter.get("/agent-for-client/:clientId", getAgentForClient);
+staffRouter.get("/public/:staffProfileId", getPublicAgentInfo);
 
 staffRouter.get("/:id", getStaffById);
 staffRouter.put("/:id", staffWriteLimiter, updateStaffMember);

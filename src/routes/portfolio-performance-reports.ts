@@ -8,6 +8,7 @@ import {
   getLatestPerformanceReport,
   getPerformanceStatistics,
   cleanupPerformanceReports,
+  backfillAssetSnapshots,
 } from "@/controllers/portfolio-performance-reports";
 
 const portfolioPerformanceReportsRouter = Router();
@@ -48,6 +49,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.delete(
   "/portfolio-performance-reports/cleanup",
   cleanupPerformanceReports
+);
+
+// Backfill assetSnapshots for existing reports that lack them
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/backfill-snapshots",
+  backfillAssetSnapshots
 );
 
 // ── Dynamic :id route last ─────────────────────────────────────────
