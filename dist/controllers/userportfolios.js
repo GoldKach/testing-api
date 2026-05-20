@@ -508,7 +508,25 @@ function deleteUserPortfolio(req, res) {
             yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
                 yield tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
                 yield tx.userPortfolio.delete({ where: { id } });
-                yield syncMasterWallet(tx, up.userId);
+                const remainingPortfolios = yield tx.userPortfolio.count({
+                    where: { userId: up.userId },
+                });
+                if (remainingPortfolios === 0) {
+                    yield tx.deposit.deleteMany({ where: { userId: up.userId } });
+                    yield tx.masterWallet.updateMany({
+                        where: { userId: up.userId },
+                        data: {
+                            balance: 0,
+                            totalDeposited: 0,
+                            totalWithdrawn: 0,
+                            totalFees: 0,
+                            netAssetValue: 0,
+                        },
+                    });
+                }
+                else {
+                    yield syncMasterWallet(tx, up.userId);
+                }
             }));
             return res.status(200).json({ data: null, error: null, message: "UserPortfolio deleted." });
         }

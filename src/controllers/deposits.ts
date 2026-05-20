@@ -104,14 +104,6 @@ async function applyTopup(
     };
   });
 
-  // Update global asset.closePrice for each asset that had a price provided by staff
-  const assetPriceUpdates = Object.entries(assetPrices)
-    .filter(([, p]) => p.closePrice > 0)
-    .map(([assetId, p]) =>
-      tx.asset.update({ where: { id: assetId }, data: { closePrice: p.closePrice } })
-    );
-  if (assetPriceUpdates.length) await Promise.all(assetPriceUpdates);
-
   // Map assetId → topup stock so we can accumulate into mother portfolio
   const topupStockByAsset = new Map<string, number>(
     subAssetRows.map((r) => [r.assetId, r.stock])
@@ -158,20 +150,15 @@ async function applyTopup(
   //   lossGain     = closeValue − costPrice
   const newNetAssetValue = newTotalInvested;
 
-  // Build lookup: assetId → approval-time closePrice (from sub-portfolio rows)
-  const closePriceByAsset = new Map<string, number>(
-    subAssetRows.map((r) => [r.assetId, r.closePrice])
-  );
-
   // 2. Merge into mother portfolio — stock accumulates, everything else recalculates
+  // closePrice for X2 always comes from the system (asset table), NOT the approval-time price.
+  // The approval-time close price is only used to value the X1 sub-portfolio snapshot.
   const assetUpdates = up.userAssets.map((ua) => {
     const topupStock   = topupStockByAsset.get(ua.assetId) ?? 0;
     const newStock     = (ua.stock ?? 0) + topupStock;
     const costPrice    = (ua.allocationPercentage / 100) * newNetAssetValue;
     const costPerShare = newStock > 0 ? costPrice / newStock : 0;
-    // Use approval-time close price (same as sub-portfolio); fall back to stored price
-    const closePrice   = closePriceByAsset.get(ua.assetId) ?? ua.asset.closePrice;
-    const closeValue   = closePrice * newStock;
+    const closeValue   = ua.asset.closePrice * newStock;   // system price, not approval-time price
     const lossGain     = closeValue - costPrice;
     return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };
   });
@@ -230,18 +217,19 @@ async function applyTopup(
 }
 
 /**
- * Sync MasterWallet.netAssetValue by summing all PortfolioWallet NAVs.
+ * Sync MasterWallet.netAssetValue = Σ userPortfolio.portfolioValue (market value).
+ * portfolioWallet.netAssetValue is the cost-basis NAV — do NOT sum that here.
  * Does NOT touch MasterWallet.balance (cash available — managed separately).
  */
 async function syncMasterWalletNav(tx: Prisma.TransactionClient, userId: string) {
-  const wallets = await tx.portfolioWallet.findMany({
-    where:  { userPortfolio: { userId } },
-    select: { netAssetValue: true },
+  const portfolios = await tx.userPortfolio.findMany({
+    where:  { userId },
+    select: { portfolioValue: true },
   });
-  const totalNav = wallets.reduce((s, w) => s + (w.netAssetValue ?? 0), 0);
+  const totalMarketValue = portfolios.reduce((s, p) => s + (p.portfolioValue ?? 0), 0);
   await tx.masterWallet.updateMany({
     where: { userId },
-    data:  { netAssetValue: totalNav },
+    data:  { netAssetValue: totalMarketValue },
   });
 }
 
@@ -531,7 +519,7 @@ export async function approveDeposit(req: Request, res: Response) {
         approvedById?: string;
         approvedByName?: string;
         transactionId?: string;
-        /** assetId → { costPerShare, closePrice } provided by staff at approval time */
+        /** assetId → { costPerShare, closePrice } provided by staff at allocation approval */
         assetPrices?: Record<string, { costPerShare: number; closePrice: number }> | null;
       };
 
@@ -566,51 +554,61 @@ export async function approveDeposit(req: Request, res: Response) {
     }
 
     const approved = await db.$transaction(async (tx) => {
-      // 1. Mark approved
-      const row = await tx.deposit.update({
-        where: { id },
-        data: {
-          transactionStatus: Status.APPROVED,
-          transactionId:     transactionId  ?? existing.transactionId ?? null,
-          approvedById:      approvedById   ?? null,
-          approvedByName:    approvedByName ?? null,
-          approvedAt:        new Date(),
-        },
-      });
-
       if (existing.depositTarget === "MASTER") {
-        // External deposit → land in master wallet cash balance
-        // Deduct fees from the credited amount on every deposit
-        const depositFees = existing.totalFees ?? 0;
-        const netAmount = existing.amount - depositFees;
-        
+        // Fees were set at deposit creation — read them from the existing record
+        const fTotalFees = Number(existing.totalFees ?? 0);
+        const netAmount  = existing.amount - fTotalFees;
+
+        const row = await tx.deposit.update({
+          where: { id },
+          data: {
+            transactionStatus: Status.APPROVED,
+            transactionId:     transactionId  ?? existing.transactionId ?? null,
+            approvedById:      approvedById   ?? null,
+            approvedByName:    approvedByName ?? null,
+            approvedAt:        new Date(),
+          },
+        });
+
+        // Credit net amount (gross minus deductions) to master wallet cash balance.
+        // totalFees always accumulates — every approval adds its deductions to the running total.
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data: {
-            balance:        { increment: netAmount > 0 ? netAmount : existing.amount },
+            balance:        { increment: netAmount >= 0 ? netAmount : 0 },
             totalDeposited: { increment: existing.amount },
-            // Accumulate fees on every deposit (not just first deposit)
-            ...(depositFees > 0
-              ? { totalFees: { increment: depositFees } }
-              : {}),
+            totalFees:      { increment: fTotalFees },
           },
         });
+
+        return row;
       } else {
         // ALLOCATION: master wallet balance → portfolio wallet (top-up)
-        // 2a. Deduct from master wallet balance
+        const row = await tx.deposit.update({
+          where: { id },
+          data: {
+            transactionStatus: Status.APPROVED,
+            transactionId:     transactionId  ?? existing.transactionId ?? null,
+            approvedById:      approvedById   ?? null,
+            approvedByName:    approvedByName ?? null,
+            approvedAt:        new Date(),
+          },
+        });
+
+        // Deduct from master wallet cash balance
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data:  { balance: { decrement: existing.amount } },
         });
 
-        // 2b. Apply top-up logic (SubPortfolio, X2 merge, TopupEvent)
+        // Apply top-up: SubPortfolio snapshot + X2 merge + TopupEvent
         await applyTopup(tx, id, existing.userPortfolioId!, existing.amount, assetPrices ?? {});
 
-        // 2c. Sync master NAV from portfolio wallets
+        // Sync master wallet NAV = Σ portfolioValue (market value)
         await syncMasterWalletNav(tx, existing.userId);
-      }
 
-      return row;
+        return row;
+      }
     }, { timeout: 30000 });
 
     const result = await db.deposit.findUnique({ where: { id: approved.id }, include: DEPOSIT_INCLUDE });
@@ -698,21 +696,19 @@ export async function reverseDeposit(req: Request, res: Response) {
       });
 
       if (existing.depositTarget === "MASTER") {
-        // Undo the master wallet cash credit and accumulated fees
-        const netAmount = existing.amount - (existing.totalFees ?? 0);
+        // Undo exactly what was credited/accumulated at approval time
+        const fTotalFees = Number(existing.totalFees ?? 0);
+        const netAmount  = existing.amount - fTotalFees;
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data: {
-            balance:        { decrement: netAmount > 0 ? netAmount : existing.amount },
+            balance:        { decrement: netAmount >= 0 ? netAmount : 0 },
             totalDeposited: { decrement: existing.amount },
-            // Reverse the accumulated fees
-            ...(existing.totalFees > 0
-              ? { totalFees: { decrement: existing.totalFees } }
-              : {}),
+            totalFees:      { decrement: fTotalFees },
           },
         });
       } else {
-        // ALLOCATION reversal: refund back to master wallet balance, deduct from portfolio
+        // ALLOCATION reversal: refund back to master wallet balance, deduct from portfolio wallet
         await tx.masterWallet.updateMany({
           where: { userId: existing.userId },
           data:  { balance: { increment: existing.amount } },
@@ -722,9 +718,29 @@ export async function reverseDeposit(req: Request, res: Response) {
             where: { id: existing.portfolioWalletId },
             data: {
               balance:       { decrement: existing.amount },
+              // netAssetValue is cost-basis NAV — decrement by the reversed amount
               netAssetValue: { decrement: existing.amount },
             },
           });
+        }
+        // Also roll back userPortfolio totals if the portfolio exists
+        if (existing.userPortfolioId) {
+          const up = await tx.userPortfolio.findUnique({
+            where:  { id: existing.userPortfolioId },
+            select: { totalInvested: true, portfolioValue: true },
+          });
+          if (up) {
+            const newTotalInvested = Math.max(0, Number(up.totalInvested) - existing.amount);
+            const newPortfolioValue = Math.max(0, Number(up.portfolioValue) - existing.amount);
+            await tx.userPortfolio.update({
+              where: { id: existing.userPortfolioId },
+              data:  {
+                totalInvested:  newTotalInvested,
+                portfolioValue: newPortfolioValue,
+                totalLossGain:  newPortfolioValue - newTotalInvested,
+              },
+            });
+          }
         }
         await syncMasterWalletNav(tx, existing.userId);
       }

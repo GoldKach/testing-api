@@ -193,6 +193,23 @@ function submitIndividualOnboarding(req, res) {
                         }),
                     });
                 }
+                if (resolvedAgentId) {
+                    const existing = yield tx.agentClientAssignment.findUnique({
+                        where: { clientId: userId },
+                        select: { id: true },
+                    });
+                    if (existing) {
+                        yield tx.agentClientAssignment.update({
+                            where: { id: existing.id },
+                            data: { agentId: resolvedAgentId, isActive: true, unassignedAt: null, assignedAt: new Date() },
+                        });
+                    }
+                    else {
+                        yield tx.agentClientAssignment.create({
+                            data: { agentId: resolvedAgentId, clientId: userId, isActive: true },
+                        });
+                    }
+                }
                 return tx.individualOnboarding.findUnique({
                     where: { id: record.id },
                     include: { beneficiaries: true, nextOfKin: true, agent: { select: { id: true, position: true, user: { select: { name: true, email: true } } } } },

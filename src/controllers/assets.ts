@@ -4,6 +4,7 @@
 import { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/db/db";
+import { cascadeClosePriceUpdates } from "@/utils/cascade";
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -337,8 +338,8 @@ export async function updateAsset(req: Request, res: Response) {
 
     // 3) Run cascade in background AFTER response is sent
     if (patch.closePrice !== undefined) {
-      cascadeClosePriceUpdate(id, Number(patch.closePrice)).catch((err) =>
-        console.error(`[cascadeClosePriceUpdate] assetId=${id}`, err)
+      cascadeClosePriceUpdates([{ assetId: id, closePrice: Number(patch.closePrice) }]).catch((err) =>
+        console.error(`[cascadeClosePriceUpdates] assetId=${id}`, err)
       );
     }
   } catch (error: any) {
@@ -350,75 +351,7 @@ export async function updateAsset(req: Request, res: Response) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Background cascade — runs after response is already sent           */
-/* ------------------------------------------------------------------ */
-async function cascadeClosePriceUpdate(assetId: string, newClosePrice: number) {
-  console.log(`[cascade] starting closePrice cascade for assetId=${assetId}, newClosePrice=${newClosePrice}`);
-
-  // 1) Fetch all affected records
-  const [portfolioAssets, userAssets] = await Promise.all([
-    db.portfolioAsset.findMany({
-      where: { assetId },
-      select: { id: true, stock: true, costPrice: true },
-    }),
-    db.userPortfolioAsset.findMany({
-      where: { assetId },
-      select: { id: true, stock: true, costPrice: true, userPortfolioId: true },
-    }),
-  ]);
-
-  // 2) Update PortfolioAssets in parallel
-  await Promise.all(
-    portfolioAssets.map((pa) => {
-      const closeValue = newClosePrice * Number(pa.stock);
-      return db.portfolioAsset.update({
-        where: { id: pa.id },
-        data: {
-          closeValue,
-          lossGain: closeValue - Number(pa.costPrice ?? 0),
-        },
-      });
-    })
-  );
-
-  // 3) Update UserPortfolioAssets in parallel
-  await Promise.all(
-    userAssets.map((ua) => {
-      const closeValue = newClosePrice * Number(ua.stock);
-      return db.userPortfolioAsset.update({
-        where: { id: ua.id },
-        data: {
-          closeValue,
-          lossGain: closeValue - Number(ua.costPrice ?? 0),
-        },
-      });
-    })
-  );
-
-  // 4) Recompute affected UserPortfolio.portfolioValue
-  const affectedUserPortfolioIds = [...new Set(userAssets.map((ua) => ua.userPortfolioId))];
-
-  await Promise.all(
-    affectedUserPortfolioIds.map(async (upId) => {
-      const rows = await db.userPortfolioAsset.findMany({
-        where: { userPortfolioId: upId },
-        select: { closeValue: true },
-      });
-      const total = rows.reduce((s, r) => s + Number(r.closeValue ?? 0), 0);
-      return db.userPortfolio.update({
-        where: { id: upId },
-        data: { portfolioValue: total },
-      });
-    })
-  );
-
-  console.log(
-    `[cascade] done — updated ${portfolioAssets.length} portfolioAssets, ` +
-    `${userAssets.length} userPortfolioAssets, ` +
-    `${affectedUserPortfolioIds.length} userPortfolios`
-  );
-}
+// cascadeClosePriceUpdates is imported from @/utils/cascade
 
 /* ------------------------------ DELETE ----------------------------- */
 /** DELETE /assets/:id
@@ -477,21 +410,30 @@ export async function batchUpdateAssetPrices(req: Request, res: Response) {
       });
     }
 
+    const validUpdates = updates.map((u) => ({
+      assetId:    u.assetId,
+      closePrice: Math.max(0, Number(u.closePrice)),
+    }));
+
     const results = await db.$transaction(
-      updates.map((update) =>
+      validUpdates.map((u) =>
         db.asset.update({
-          where: { id: update.assetId },
-          data: { closePrice: Math.max(0, Number(update.closePrice)) },
+          where: { id: u.assetId },
+          data:  { closePrice: u.closePrice },
         })
       )
     );
 
-    return res.status(200).json({
-      data: results,
-      message: `Updated ${results.length} asset prices`,
-      note: "User portfolios will be recalculated on next deposit/withdrawal or manual recompute.",
-      error: null,
+    // Respond immediately, then cascade all price changes together in one pass
+    res.status(200).json({
+      data:    results,
+      message: `Updated ${results.length} asset prices. Portfolio values are recalculating in the background.`,
+      error:   null,
     });
+
+    cascadeClosePriceUpdates(validUpdates).catch((err) =>
+      console.error(`[cascadeClosePriceUpdates] batch (${validUpdates.length} assets)`, err)
+    );
   } catch (error: any) {
     if (error?.code === "P2025") {
       return res.status(404).json({ data: null, error: "One or more assets not found" });

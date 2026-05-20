@@ -173,16 +173,17 @@ async function recomputeUPAsFor(userPortfolioId: string, client: Tx = db) {
  * Sync MasterWallet by summing all PortfolioWallet NAVs for the user.
  */
 async function syncMasterWallet(client: Tx, userId: string) {
-  const wallets = await client.portfolioWallet.findMany({
-    where:  { userPortfolio: { userId } },
-    select: { netAssetValue: true },
+  // Sum portfolioValue (market value), not portfolioWallet.netAssetValue (cost-basis NAV)
+  const portfolios = await client.userPortfolio.findMany({
+    where:  { userId },
+    select: { portfolioValue: true },
   });
 
-  const totalNav = wallets.reduce((sum, w) => sum + toNumber(w.netAssetValue, 0), 0);
+  const totalMarketValue = portfolios.reduce((sum, p) => sum + toNumber(p.portfolioValue, 0), 0);
 
   await client.masterWallet.updateMany({
     where: { userId },
-    data:  { netAssetValue: totalNav },
+    data:  { netAssetValue: totalMarketValue },
   });
 }
 
@@ -677,12 +678,35 @@ export async function deleteUserPortfolio(req: Request, res: Response) {
     if (!up) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
 
     await db.$transaction(async (tx) => {
-      // Cascade order: assets → sub-portfolio assets → sub-portfolios → wallet → portfolio
-      // (Prisma onDelete: Cascade handles most, but explicit ordering avoids FK issues)
+      // 1. Delete assets and portfolio (cascade handles wallet, sub-portfolios, etc.)
       await tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
       await tx.userPortfolio.delete({ where: { id } });
-      // Sync master wallet after removal
-      await syncMasterWallet(tx, up.userId);
+
+      // 2. Check if user has any remaining portfolios
+      const remainingPortfolios = await tx.userPortfolio.count({
+        where: { userId: up.userId },
+      });
+
+      if (remainingPortfolios === 0) {
+        // No portfolios left — reset user to clean slate (like a new client)
+        // Delete all deposits
+        await tx.deposit.deleteMany({ where: { userId: up.userId } });
+
+        // Zero out master wallet completely
+        await tx.masterWallet.updateMany({
+          where: { userId: up.userId },
+          data: {
+            balance:        0,
+            totalDeposited: 0,
+            totalWithdrawn: 0,
+            totalFees:      0,
+            netAssetValue:  0,
+          },
+        });
+      } else {
+        // Still has other portfolios — just resync NAV from remaining wallets
+        await syncMasterWallet(tx, up.userId);
+      }
     });
 
     return res.status(200).json({ data: null, error: null, message: "UserPortfolio deleted." });

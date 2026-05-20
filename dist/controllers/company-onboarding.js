@@ -139,15 +139,12 @@ function submitCompanyOnboarding(req, res) {
             let validAgentId = null;
             if (payload.agentId) {
                 const agentExists = yield db_1.db.staffProfile.findUnique({
-                    where: { userId: payload.agentId },
+                    where: { id: payload.agentId },
                     select: { id: true },
                 });
                 if (agentExists) {
                     validAgentId = agentExists.id;
                 }
-            }
-            else {
-                validAgentId = null;
             }
             const onboardingData = {
                 userId,
@@ -230,6 +227,23 @@ function submitCompanyOnboarding(req, res) {
                             };
                         }),
                     });
+                }
+                if (validAgentId) {
+                    const existing = yield tx.agentClientAssignment.findUnique({
+                        where: { clientId: userId },
+                        select: { id: true },
+                    });
+                    if (existing) {
+                        yield tx.agentClientAssignment.update({
+                            where: { id: existing.id },
+                            data: { agentId: validAgentId, isActive: true, unassignedAt: null, assignedAt: new Date() },
+                        });
+                    }
+                    else {
+                        yield tx.agentClientAssignment.create({
+                            data: { agentId: validAgentId, clientId: userId, isActive: true },
+                        });
+                    }
                 }
                 return record.id;
             }), { timeout: 30000 });

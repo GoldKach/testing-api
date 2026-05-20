@@ -152,9 +152,9 @@ export async function refreshPortfolioSummary(req: Request, res: Response) {
       for (const up of userPortfolios) {
         if (!up.wallet) continue;
 
+        // nav = cost-basis NAV (amount invested, NOT market value — do not overwrite)
         const nav = up.wallet.netAssetValue;
         let totalValue = 0;
-        let totalCost  = 0;
 
         for (const ua of up.userAssets) {
           const costPrice  = (ua.allocationPercentage / 100) * nav;
@@ -168,32 +168,30 @@ export async function refreshPortfolioSummary(req: Request, res: Response) {
           });
 
           totalValue += closeValue;
-          totalCost  += costPrice;
         }
+
+        const totalInvested  = nav + up.wallet.totalFees;
+        const totalLossGain  = totalValue - totalInvested;
 
         await tx.userPortfolio.update({
           where: { id: up.id },
           data: {
             portfolioValue: totalValue,
-            totalInvested:  totalCost,
-            totalLossGain:  totalValue - totalCost,
+            totalInvested,
+            totalLossGain,
           },
         });
-
-        await tx.portfolioWallet.update({
-          where: { id: up.wallet.id },
-          data:  { netAssetValue: totalValue - up.wallet.totalFees },
-        });
+        // portfolioWallet.netAssetValue is the cost-basis NAV — do NOT overwrite with market value
 
         results.push({ portfolioId: up.id, customName: up.customName, newValue: totalValue });
       }
 
-      // Sync master wallet NAV
-      const wallets = await tx.portfolioWallet.findMany({
-        where:  { userPortfolio: { userId } },
-        select: { netAssetValue: true },
+      // Sync master wallet NAV = Σ portfolioValue (market value), NOT portfolioWallet.netAssetValue
+      const freshPortfolios = await tx.userPortfolio.findMany({
+        where:  { userId },
+        select: { portfolioValue: true },
       });
-      const totalNAV = wallets.reduce((s, w) => s + w.netAssetValue, 0);
+      const totalNAV = freshPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
       await tx.masterWallet.updateMany({
         where: { userId },
         data:  { netAssetValue: totalNAV },

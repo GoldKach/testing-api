@@ -21,6 +21,7 @@ exports.getAgentClients = getAgentClients;
 exports.assignClientToAgent = assignClientToAgent;
 exports.unassignClientFromAgent = unassignClientFromAgent;
 exports.getAgentForClient = getAgentForClient;
+exports.getPublicAgentInfo = getPublicAgentInfo;
 exports.hardDeleteStaffMember = hardDeleteStaffMember;
 const db_1 = require("../db/db");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
@@ -716,6 +717,50 @@ function getAgentForClient(req, res) {
         }
         catch (error) {
             console.error("Error fetching agent for client:", error);
+            return res.status(500).json({ success: false, data: null, error: "Server error." });
+        }
+    });
+}
+function getPublicAgentInfo(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { staffProfileId } = req.params;
+        try {
+            const profile = yield db_1.db.staffProfile.findUnique({
+                where: { id: staffProfileId },
+                select: {
+                    id: true,
+                    position: true,
+                    department: true,
+                    isActive: true,
+                    user: {
+                        select: {
+                            name: true,
+                            firstName: true,
+                            lastName: true,
+                            imageUrl: true,
+                            role: true,
+                        },
+                    },
+                },
+            });
+            if (!profile || !profile.isActive) {
+                return res.status(404).json({ success: false, data: null, error: "Agent not found." });
+            }
+            return res.status(200).json({
+                success: true,
+                data: {
+                    id: profile.id,
+                    name: profile.user.name,
+                    firstName: profile.user.firstName,
+                    lastName: profile.user.lastName,
+                    imageUrl: profile.user.imageUrl,
+                    position: profile.position,
+                    department: profile.department,
+                },
+            });
+        }
+        catch (error) {
+            console.error("Error fetching public agent info:", error);
             return res.status(500).json({ success: false, data: null, error: "Server error." });
         }
     });

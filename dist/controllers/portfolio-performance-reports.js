@@ -247,7 +247,7 @@ function generateDailyReportsForAllPortfolios() {
         let success = 0, failed = 0;
         const errors = [];
         const reportDate = new Date();
-        reportDate.setHours(0, 0, 0, 0);
+        reportDate.setUTCHours(0, 0, 0, 0);
         for (const portfolio of allPortfolios) {
             try {
                 const existing = yield db_1.db.userPortfolioPerformanceReport.findFirst({
@@ -301,7 +301,7 @@ function generatePerformanceReport(req, res) {
             if (!portfolio)
                 return res.status(404).json({ data: null, error: "Portfolio not found" });
             const date = reportDate ? new Date(reportDate) : new Date();
-            date.setHours(0, 0, 0, 0);
+            date.setUTCHours(0, 0, 0, 0);
             const reportId = yield generateAndSaveReport(userPortfolioId, date);
             if (!reportId) {
                 return res.status(500).json({ data: null, error: "Failed to generate report" });
@@ -406,6 +406,10 @@ function listPerformanceReports(req, res) {
                         start.setMonth(now.getMonth() - 1);
                         break;
                 }
+            }
+            else {
+                start = new Date(start.getTime() - 12 * 60 * 60 * 1000);
+                end.setTime(end.getTime() + 12 * 60 * 60 * 1000);
             }
             const reports = yield db_1.db.userPortfolioPerformanceReport.findMany({
                 where: {
@@ -541,7 +545,7 @@ function generateDailyReportsForUser(userId) {
             orderBy: { createdAt: "asc" },
         });
         const reportDate = new Date();
-        reportDate.setHours(0, 0, 0, 0);
+        reportDate.setUTCHours(0, 0, 0, 0);
         let success = 0, skipped = 0, failed = 0;
         const errors = [];
         for (const up of portfolios) {
@@ -580,8 +584,11 @@ function generateDailyReportsForUser(userId) {
 function backfillAssetSnapshots(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
+            const { limit = 200 } = req.body;
             const reports = yield db_1.db.userPortfolioPerformanceReport.findMany({
                 where: { assetSnapshots: { none: {} } },
+                take: limit,
+                orderBy: { reportDate: "desc" },
                 include: {
                     userPortfolio: {
                         include: {
@@ -592,9 +599,12 @@ function backfillAssetSnapshots(req, res) {
                     },
                 },
             });
+            const remaining = yield db_1.db.userPortfolioPerformanceReport.count({
+                where: { assetSnapshots: { none: {} } },
+            });
             if (reports.length === 0) {
                 return res.status(200).json({
-                    data: { backfilled: 0 },
+                    data: { backfilled: 0, remaining: 0 },
                     message: "All reports already have asset snapshots.",
                     error: null,
                 });
@@ -604,8 +614,10 @@ function backfillAssetSnapshots(req, res) {
             for (const report of reports) {
                 try {
                     const assets = report.userPortfolio.userAssets;
-                    if (assets.length === 0)
+                    if (assets.length === 0) {
+                        backfilled++;
                         continue;
+                    }
                     const currentTotalCloseValue = assets.reduce((s, a) => { var _a; return s + ((_a = a.closeValue) !== null && _a !== void 0 ? _a : 0); }, 0);
                     const scale = currentTotalCloseValue > 0
                         ? report.totalCloseValue / currentTotalCloseValue
@@ -641,9 +653,13 @@ function backfillAssetSnapshots(req, res) {
                     failed++;
                 }
             }
+            const stillRemaining = remaining - backfilled;
+            console.log(`✅ Backfill: ${backfilled} done, ${failed} failed, ${stillRemaining} still remaining`);
             return res.status(200).json({
-                data: { backfilled, failed, total: reports.length },
-                message: `Backfilled ${backfilled} reports (${failed} failed).`,
+                data: { backfilled, failed, total: reports.length, remaining: stillRemaining },
+                message: stillRemaining > 0
+                    ? `Backfilled ${backfilled} reports. ${stillRemaining} still remaining — call again to continue.`
+                    : `All done. Backfilled ${backfilled} reports.`,
                 error: null,
             });
         }

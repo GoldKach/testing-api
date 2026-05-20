@@ -177,10 +177,15 @@ export async function syncMasterWalletForUser(req: Request, res: Response) {
 
     const portfolioWallets = await db.portfolioWallet.findMany({
       where:  { userPortfolio: { userId } },
-      select: { netAssetValue: true, totalFees: true, balance: true },
+      select: { totalFees: true, balance: true },
     });
 
-    const totalNAV      = portfolioWallets.reduce((s, w) => s + w.netAssetValue, 0);
+    // Sum portfolioValue (market value) from userPortfolio, NOT netAssetValue (cost-basis NAV)
+    const userPortfolios = await db.userPortfolio.findMany({
+      where:  { userId },
+      select: { portfolioValue: true },
+    });
+    const totalNAV = userPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
     const totalFees     = portfolioWallets.reduce((s, w) => s + w.totalFees,     0);
     const totalDeposited = await db.deposit.aggregate({
       where:  { userId, transactionStatus: "APPROVED" },
