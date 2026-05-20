@@ -163,21 +163,31 @@ function syncMasterWalletForUser(req, res) {
             });
             const totalNAV = userPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
             const totalFees = portfolioWallets.reduce((s, w) => s + w.totalFees, 0);
-            const totalDeposited = yield db_1.db.deposit.aggregate({
-                where: { userId, transactionStatus: "APPROVED" },
+            const masterDeposits = yield db_1.db.deposit.findMany({
+                where: { userId, transactionStatus: "APPROVED", depositTarget: "MASTER" },
+                select: { amount: true, totalFees: true },
+            });
+            const allocationDeposits = yield db_1.db.deposit.aggregate({
+                where: { userId, transactionStatus: "APPROVED", depositTarget: "ALLOCATION" },
                 _sum: { amount: true },
             });
-            const totalWithdrawn = yield db_1.db.withdrawal.aggregate({
-                where: { userId, transactionStatus: "APPROVED" },
+            const hardWithdrawals = yield db_1.db.withdrawal.aggregate({
+                where: { userId, transactionStatus: "APPROVED", withdrawalType: "HARD_WITHDRAWAL" },
                 _sum: { amount: true },
             });
+            const totalDeposited = masterDeposits.reduce((s, d) => s + d.amount, 0);
+            const totalDepositFees = masterDeposits.reduce((s, d) => { var _a; return s + ((_a = d.totalFees) !== null && _a !== void 0 ? _a : 0); }, 0);
+            const totalAllocated = (_a = allocationDeposits._sum.amount) !== null && _a !== void 0 ? _a : 0;
+            const totalWithdrawn = (_b = hardWithdrawals._sum.amount) !== null && _b !== void 0 ? _b : 0;
+            const cashBalance = totalDeposited - totalDepositFees - totalAllocated - totalWithdrawn;
             const updated = yield db_1.db.masterWallet.update({
                 where: { userId },
                 data: {
+                    balance: Math.max(0, cashBalance),
                     netAssetValue: totalNAV,
-                    totalFees,
-                    totalDeposited: (_a = totalDeposited._sum.amount) !== null && _a !== void 0 ? _a : 0,
-                    totalWithdrawn: (_b = totalWithdrawn._sum.amount) !== null && _b !== void 0 ? _b : 0,
+                    totalFees: totalDepositFees,
+                    totalDeposited,
+                    totalWithdrawn,
                 },
                 include: MASTER_INCLUDE,
             });

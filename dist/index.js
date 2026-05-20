@@ -25,10 +25,13 @@ const migrations_1 = __importDefault(require("./routes/migrations"));
 const send_email_1 = __importDefault(require("./routes/send-email"));
 const portfolio_report_cron_1 = require("./jobs/portfolio-report-cron");
 const subportfolios_1 = __importDefault(require("./routes/subportfolios"));
+const auditLogs_route_1 = __importDefault(require("./routes/compliance/auditLogs.route"));
+const auditContext_middleware_1 = require("./audit/auditContext.middleware");
 const cors = require("cors");
 const app = (0, express_1.default)();
 app.use(cors());
 app.use(express_1.default.json());
+app.use(auditContext_middleware_1.auditContextMiddleware);
 const PORT = Number(process.env.PORT) || 8000;
 app.listen(PORT, "0.0.0.0", () => {
     (0, portfolio_report_cron_1.startPortfolioReportCronFromEnv)();
@@ -56,3 +59,4 @@ app.use("/api/v1", master_wallets_1.default);
 app.use("/api/v1", portfolio_summary_1.default);
 app.use("/api/v1", migrations_1.default);
 app.use("/api/v1", send_email_1.default);
+app.use("/api/v1", auditLogs_route_1.default);

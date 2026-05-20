@@ -678,24 +678,51 @@ export async function deleteUserPortfolio(req: Request, res: Response) {
     if (!up) return res.status(404).json({ data: null, error: "UserPortfolio not found." });
 
     await db.$transaction(async (tx) => {
-      // 1. Delete assets and portfolio (cascade handles wallet, sub-portfolios, etc.)
+      // 1. Before deleting, sum approved allocation deposits for this portfolio
+      //    so we can return those funds to the master wallet cash balance.
+      const allocationSum = await tx.deposit.aggregate({
+        where: { userPortfolioId: id, depositTarget: "ALLOCATION", transactionStatus: "APPROVED" },
+        _sum:  { amount: true },
+      });
+      const allocatedAmount = allocationSum._sum.amount ?? 0;
+
+      // 2. Explicitly delete deposits and withdrawals linked to this portfolio
+      //    before deleting the portfolio itself. The DB-level cascade migration may
+      //    not be applied yet, so we handle it in application code to guarantee cleanup.
+      await tx.deposit.deleteMany({ where: { userPortfolioId: id } });
+      await tx.withdrawal.deleteMany({ where: { userPortfolioId: id } });
+
+      // 3. Delete assets and portfolio (cascade handles wallet, sub-portfolios, etc.)
       await tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
       await tx.userPortfolio.delete({ where: { id } });
 
-      // 2. Check if user has any remaining portfolios
+      // 4. Check if user has any remaining portfolios
       const remainingPortfolios = await tx.userPortfolio.count({
         where: { userId: up.userId },
       });
 
       if (remainingPortfolios === 0) {
-        // No portfolios left — reset user to clean slate (like a new client)
-        // Delete all deposits
+        // No portfolios left — reset user to clean slate (like a new client).
+        // Delete any remaining deposits and withdrawals that belong to this user
+        // but weren't linked to a portfolio (e.g. MASTER deposits).
         await tx.deposit.deleteMany({ where: { userId: up.userId } });
+        await tx.withdrawal.deleteMany({ where: { userId: up.userId } });
 
-        // Zero out master wallet completely
-        await tx.masterWallet.updateMany({
-          where: { userId: up.userId },
-          data: {
+        // Zero out master wallet — use upsert so legacy users without a wallet row
+        // get one created, preventing the silent no-op from updateMany.
+        await tx.masterWallet.upsert({
+          where:  { userId: up.userId },
+          create: {
+            userId:        up.userId,
+            accountNumber: `GK${Date.now().toString().slice(-9)}`,
+            balance:        0,
+            totalDeposited: 0,
+            totalWithdrawn: 0,
+            totalFees:      0,
+            netAssetValue:  0,
+            status:         "ACTIVE",
+          },
+          update: {
             balance:        0,
             totalDeposited: 0,
             totalWithdrawn: 0,
@@ -704,7 +731,14 @@ export async function deleteUserPortfolio(req: Request, res: Response) {
           },
         });
       } else {
-        // Still has other portfolios — just resync NAV from remaining wallets
+        // Still has other portfolios — return the deleted portfolio's allocated funds
+        // to the master wallet cash balance, then resync NAV.
+        if (allocatedAmount > 0) {
+          await tx.masterWallet.updateMany({
+            where: { userId: up.userId },
+            data:  { balance: { increment: allocatedAmount } },
+          });
+        }
         await syncMasterWallet(tx, up.userId);
       }
     });

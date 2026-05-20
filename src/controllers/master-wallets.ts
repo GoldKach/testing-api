@@ -185,24 +185,38 @@ export async function syncMasterWalletForUser(req: Request, res: Response) {
       where:  { userId },
       select: { portfolioValue: true },
     });
-    const totalNAV = userPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
-    const totalFees     = portfolioWallets.reduce((s, w) => s + w.totalFees,     0);
-    const totalDeposited = await db.deposit.aggregate({
-      where:  { userId, transactionStatus: "APPROVED" },
-      _sum:   { amount: true },
+    const totalNAV   = userPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
+    const totalFees  = portfolioWallets.reduce((s, w) => s + w.totalFees, 0);
+
+    // Recalculate cash balance from approved transactions:
+    //   balance = Σ netMasterDeposits - Σ allocations - Σ hardWithdrawals
+    const masterDeposits = await db.deposit.findMany({
+      where:  { userId, transactionStatus: "APPROVED", depositTarget: "MASTER" },
+      select: { amount: true, totalFees: true },
     });
-    const totalWithdrawn = await db.withdrawal.aggregate({
-      where:  { userId, transactionStatus: "APPROVED" },
-      _sum:   { amount: true },
+    const allocationDeposits = await db.deposit.aggregate({
+      where: { userId, transactionStatus: "APPROVED", depositTarget: "ALLOCATION" },
+      _sum:  { amount: true },
     });
+    const hardWithdrawals = await db.withdrawal.aggregate({
+      where: { userId, transactionStatus: "APPROVED", withdrawalType: "HARD_WITHDRAWAL" },
+      _sum:  { amount: true },
+    });
+
+    const totalDeposited   = masterDeposits.reduce((s, d) => s + d.amount, 0);
+    const totalDepositFees = masterDeposits.reduce((s, d) => s + (d.totalFees ?? 0), 0);
+    const totalAllocated   = allocationDeposits._sum.amount ?? 0;
+    const totalWithdrawn   = hardWithdrawals._sum.amount ?? 0;
+    const cashBalance      = totalDeposited - totalDepositFees - totalAllocated - totalWithdrawn;
 
     const updated = await db.masterWallet.update({
       where: { userId },
       data: {
+        balance:        Math.max(0, cashBalance),
         netAssetValue:  totalNAV,
-        totalFees,
-        totalDeposited: totalDeposited._sum.amount ?? 0,
-        totalWithdrawn: totalWithdrawn._sum.amount ?? 0,
+        totalFees:      totalDepositFees,
+        totalDeposited,
+        totalWithdrawn,
       },
       include: MASTER_INCLUDE,
     });

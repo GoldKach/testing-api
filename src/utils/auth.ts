@@ -1,6 +1,7 @@
 
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import type { AuditContext } from "@/audit/auditContext.middleware";
 
 export interface TokenPayload {
   id:string;
@@ -11,6 +12,7 @@ export interface TokenPayload {
 
 export interface AuthRequest extends Request {
   user?: TokenPayload;
+  auditContext?: AuditContext;
 }
 
 export function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {

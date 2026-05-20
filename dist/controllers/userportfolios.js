@@ -506,6 +506,14 @@ function deleteUserPortfolio(req, res) {
             if (!up)
                 return res.status(404).json({ data: null, error: "UserPortfolio not found." });
             yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+                var _a;
+                const allocationSum = yield tx.deposit.aggregate({
+                    where: { userPortfolioId: id, depositTarget: "ALLOCATION", transactionStatus: "APPROVED" },
+                    _sum: { amount: true },
+                });
+                const allocatedAmount = (_a = allocationSum._sum.amount) !== null && _a !== void 0 ? _a : 0;
+                yield tx.deposit.deleteMany({ where: { userPortfolioId: id } });
+                yield tx.withdrawal.deleteMany({ where: { userPortfolioId: id } });
                 yield tx.userPortfolioAsset.deleteMany({ where: { userPortfolioId: id } });
                 yield tx.userPortfolio.delete({ where: { id } });
                 const remainingPortfolios = yield tx.userPortfolio.count({
@@ -513,9 +521,20 @@ function deleteUserPortfolio(req, res) {
                 });
                 if (remainingPortfolios === 0) {
                     yield tx.deposit.deleteMany({ where: { userId: up.userId } });
-                    yield tx.masterWallet.updateMany({
+                    yield tx.withdrawal.deleteMany({ where: { userId: up.userId } });
+                    yield tx.masterWallet.upsert({
                         where: { userId: up.userId },
-                        data: {
+                        create: {
+                            userId: up.userId,
+                            accountNumber: `GK${Date.now().toString().slice(-9)}`,
+                            balance: 0,
+                            totalDeposited: 0,
+                            totalWithdrawn: 0,
+                            totalFees: 0,
+                            netAssetValue: 0,
+                            status: "ACTIVE",
+                        },
+                        update: {
                             balance: 0,
                             totalDeposited: 0,
                             totalWithdrawn: 0,
@@ -525,6 +544,12 @@ function deleteUserPortfolio(req, res) {
                     });
                 }
                 else {
+                    if (allocatedAmount > 0) {
+                        yield tx.masterWallet.updateMany({
+                            where: { userId: up.userId },
+                            data: { balance: { increment: allocatedAmount } },
+                        });
+                    }
                     yield syncMasterWallet(tx, up.userId);
                 }
             }));

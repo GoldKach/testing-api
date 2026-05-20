@@ -27,6 +27,8 @@ import sendEmailRouter        from "./routes/send-email";
 import { startPortfolioReportCronFromEnv } from "./jobs/portfolio-report-cron";
 
 import subPortfoliosRouter from "./routes/subportfolios";
+import auditLogsRouter from "./routes/compliance/auditLogs.route";
+import { auditContextMiddleware } from "./audit/auditContext.middleware";
 
 const cors = require("cors");
 
@@ -34,6 +36,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(auditContextMiddleware);
 
 const PORT = Number(process.env.PORT) || 8000;
 
@@ -66,4 +69,5 @@ app.use("/api/v1", portfolioWalletsRouter);
 app.use("/api/v1", masterWalletsRouter);
 app.use("/api/v1", portfolioSummaryRouter);
 app.use("/api/v1", migrationsRouter);
-app.use("/api/v1", sendEmailRouter); 
+app.use("/api/v1", sendEmailRouter);
+app.use("/api/v1", auditLogsRouter);

@@ -397,12 +397,20 @@ export async function createDeposit(req: Request, res: Response) {
       isFirstDeposit = !priorDeposit;
     }
 
-    // Auto-generate referenceNo from master wallet account number + timestamp
-    const masterWallet = await db.masterWallet.findUnique({
+    // Ensure master wallet exists (creates one for legacy users who lack it)
+    let masterWallet = await db.masterWallet.findUnique({
       where:  { userId },
-      select: { accountNumber: true },
+      select: { id: true, accountNumber: true },
     });
-    const autoRefNo = masterWallet?.accountNumber
+    if (!masterWallet) {
+      const acctNo = `GK${Date.now().toString().slice(-9)}`;
+      masterWallet = await db.masterWallet.create({
+        data: { userId, accountNumber: acctNo, balance: 0, totalDeposited: 0, totalWithdrawn: 0, totalFees: 0, netAssetValue: 0, status: "ACTIVE" },
+        select: { id: true, accountNumber: true },
+      });
+      masterWalletId = masterWallet.id;
+    }
+    const autoRefNo = masterWallet.accountNumber
       ? `${masterWallet.accountNumber}-${Date.now()}`
       : referenceNo ?? `DEP-${Date.now()}`;
 
@@ -573,10 +581,20 @@ export async function approveDeposit(req: Request, res: Response) {
         });
 
         // Credit net amount (gross minus deductions) to master wallet cash balance.
-        // totalFees always accumulates — every approval adds its deductions to the running total.
-        await tx.masterWallet.updateMany({
+        // Use upsert so that legacy users without a master wallet row get one created
+        // automatically — updateMany would silently update 0 rows otherwise.
+        await tx.masterWallet.upsert({
           where: { userId: existing.userId },
-          data: {
+          create: {
+            userId:         existing.userId,
+            accountNumber:  `GK${Date.now().toString().slice(-9)}`,
+            balance:        netAmount >= 0 ? netAmount : 0,
+            totalDeposited: existing.amount,
+            totalFees:      fTotalFees,
+            netAssetValue:  0,
+            status:         "ACTIVE",
+          },
+          update: {
             balance:        { increment: netAmount >= 0 ? netAmount : 0 },
             totalDeposited: { increment: existing.amount },
             totalFees:      { increment: fTotalFees },

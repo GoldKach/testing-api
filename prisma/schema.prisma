@@ -391,7 +391,7 @@ model Deposit {
 
   // Which portfolio this deposit is going into (null if depositing to master only)
   userPortfolioId String?
-  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
+  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
 
   depositTarget     DepositTarget     @default(MASTER)
   amount            Float
@@ -455,7 +455,7 @@ model Withdrawal {
 
   // Withdrawal is always from a specific portfolio
   userPortfolioId String?
-  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id])
+  userPortfolio   UserPortfolio? @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
 
   withdrawalType    WithdrawalType    @default(HARD_WITHDRAWAL)
   amount            Float
@@ -1128,4 +1128,77 @@ model CompanyUBO {
 //   individualOnboardingClients IndividualOnboarding[] @relation("IndividualOnboardingAgent")
 //   companyOnboardingClients    CompanyOnboarding[]    @relation("CompanyOnboardingAgent")
 // =====================
+
+// =====================
+// CMA Audit Log (Immutable, tamper-evident chain)
+// =====================
+
+enum AuditTransactionType {
+  DEPOSIT_CREATED
+  DEPOSIT_APPROVED
+  DEPOSIT_REJECTED
+  DEPOSIT_REVERSED
+  WITHDRAWAL_CREATED
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+  REDEMPTION_CREATED
+  REDEMPTION_APPROVED
+  REDEMPTION_REJECTED
+  PORTFOLIO_ALLOCATION
+  FEE_DEDUCTED
+  CLOSE_PRICE_UPDATED
+}
+
+enum AuditTransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVERSED
+}
+
+// Rows in this table are IMMUTABLE: a DB trigger prevents any UPDATE or DELETE.
+// The hash column implements a SHA-256 chain: each row hashes its own fields
+// plus the previousHash, creating a tamper-evident audit trail.
+model TransactionAuditLog {
+  id              String   @id @default(uuid())
+  sequence        Int      @default(autoincrement())
+
+  transactionType   AuditTransactionType
+  transactionId     String?                // FK to Deposit.id, Withdrawal.id, etc.
+  transactionStatus AuditTransactionStatus
+
+  // The client account involved
+  userId          String
+  userName        String?
+  userEmail       String?
+
+  // The staff member who performed the action
+  performedById   String?
+  performedByName String?
+  performedByRole String?
+
+  amount          Float?
+  currency        String   @default("USD")
+  description     String?
+
+  // Extra structured data (asset prices, portfolio info, etc.)
+  metadata        Json?
+
+  // Tamper-evident chain
+  hash            String   // SHA-256 of (previousHash + key fields)
+  previousHash    String   @default("GENESIS")
+
+  // Audit context
+  ipAddress       String?
+  userAgent       String?
+  systemVersion   String   @default("1.0.0")
+
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([transactionId])
+  @@index([transactionType])
+  @@index([createdAt])
+  @@index([sequence])
+}
 
