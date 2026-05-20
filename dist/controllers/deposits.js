@@ -125,7 +125,6 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
             data: { stock: a.stock, costPrice: a.costPrice, costPerShare: a.costPerShare, closeValue: a.closeValue, lossGain: a.lossGain },
         })));
         const newTotalCloseValue = assetUpdates.reduce((s, a) => s + a.closeValue, 0);
-        const newTotalCostPrice = assetUpdates.reduce((s, a) => s + a.costPrice, 0);
         yield tx.userPortfolio.update({
             where: { id: userPortfolioId },
             data: {
@@ -398,7 +397,8 @@ function approveDeposit(req, res) {
         var _a, _b;
         try {
             const { id } = req.params;
-            const { approvedById, approvedByName, transactionId, assetPrices } = ((_a = req.body) !== null && _a !== void 0 ? _a : {});
+            const { approvedById, approvedByName, transactionId, assetPrices, approvedAt } = ((_a = req.body) !== null && _a !== void 0 ? _a : {});
+            const approvalDate = approvedAt ? new Date(approvedAt) : new Date();
             const existing = yield db_1.db.deposit.findUnique({
                 where: { id },
                 include: { portfolioWallet: { select: { id: true, netAssetValue: true, totalFees: true } } },
@@ -438,7 +438,7 @@ function approveDeposit(req, res) {
                             transactionId: (_b = transactionId !== null && transactionId !== void 0 ? transactionId : existing.transactionId) !== null && _b !== void 0 ? _b : null,
                             approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
                             approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
-                            approvedAt: new Date(),
+                            approvedAt: approvalDate,
                         },
                     });
                     yield tx.masterWallet.updateMany({
@@ -459,7 +459,7 @@ function approveDeposit(req, res) {
                             transactionId: (_c = transactionId !== null && transactionId !== void 0 ? transactionId : existing.transactionId) !== null && _c !== void 0 ? _c : null,
                             approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
                             approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
-                            approvedAt: new Date(),
+                            approvedAt: approvalDate,
                         },
                     });
                     yield tx.masterWallet.updateMany({

@@ -173,7 +173,6 @@ async function applyTopup(
   );
 
   const newTotalCloseValue = assetUpdates.reduce((s, a) => s + a.closeValue, 0);
-  const newTotalCostPrice  = assetUpdates.reduce((s, a) => s + a.costPrice, 0);
 
   // 3. Update UserPortfolio totals
   await tx.userPortfolio.update({
@@ -514,14 +513,17 @@ export async function updateDeposit(req: Request, res: Response) {
 export async function approveDeposit(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { approvedById, approvedByName, transactionId, assetPrices } =
+    const { approvedById, approvedByName, transactionId, assetPrices, approvedAt } =
       (req.body ?? {}) as {
         approvedById?: string;
         approvedByName?: string;
         transactionId?: string;
         /** assetId → { costPerShare, closePrice } provided by staff at allocation approval */
         assetPrices?: Record<string, { costPerShare: number; closePrice: number }> | null;
+        approvedAt?: string;
       };
+
+    const approvalDate = approvedAt ? new Date(approvedAt) : new Date();
 
     const existing = await db.deposit.findUnique({
       where:   { id },
@@ -566,7 +568,7 @@ export async function approveDeposit(req: Request, res: Response) {
             transactionId:     transactionId  ?? existing.transactionId ?? null,
             approvedById:      approvedById   ?? null,
             approvedByName:    approvedByName ?? null,
-            approvedAt:        new Date(),
+            approvedAt:        approvalDate,
           },
         });
 
@@ -591,7 +593,7 @@ export async function approveDeposit(req: Request, res: Response) {
             transactionId:     transactionId  ?? existing.transactionId ?? null,
             approvedById:      approvedById   ?? null,
             approvedByName:    approvedByName ?? null,
-            approvedAt:        new Date(),
+            approvedAt:        approvalDate,
           },
         });
 
