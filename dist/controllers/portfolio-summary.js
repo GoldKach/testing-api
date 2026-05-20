@@ -139,7 +139,6 @@ function refreshPortfolioSummary(req, res) {
                         continue;
                     const nav = up.wallet.netAssetValue;
                     let totalValue = 0;
-                    let totalCost = 0;
                     for (const ua of up.userAssets) {
                         const costPrice = (ua.allocationPercentage / 100) * nav;
                         const stock = ua.costPerShare > 0 ? costPrice / ua.costPerShare : 0;
@@ -150,27 +149,24 @@ function refreshPortfolioSummary(req, res) {
                             data: { costPrice, stock, closeValue, lossGain },
                         });
                         totalValue += closeValue;
-                        totalCost += costPrice;
                     }
+                    const totalInvested = nav + up.wallet.totalFees;
+                    const totalLossGain = totalValue - totalInvested;
                     yield tx.userPortfolio.update({
                         where: { id: up.id },
                         data: {
                             portfolioValue: totalValue,
-                            totalInvested: totalCost,
-                            totalLossGain: totalValue - totalCost,
+                            totalInvested,
+                            totalLossGain,
                         },
-                    });
-                    yield tx.portfolioWallet.update({
-                        where: { id: up.wallet.id },
-                        data: { netAssetValue: totalValue - up.wallet.totalFees },
                     });
                     results.push({ portfolioId: up.id, customName: up.customName, newValue: totalValue });
                 }
-                const wallets = yield tx.portfolioWallet.findMany({
-                    where: { userPortfolio: { userId } },
-                    select: { netAssetValue: true },
+                const freshPortfolios = yield tx.userPortfolio.findMany({
+                    where: { userId },
+                    select: { portfolioValue: true },
                 });
-                const totalNAV = wallets.reduce((s, w) => s + w.netAssetValue, 0);
+                const totalNAV = freshPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
                 yield tx.masterWallet.updateMany({
                     where: { userId },
                     data: { netAssetValue: totalNAV },

@@ -17,6 +17,7 @@ exports.updateAsset = updateAsset;
 exports.deleteAsset = deleteAsset;
 exports.batchUpdateAssetPrices = batchUpdateAssetPrices;
 const db_1 = require("../db/db");
+const cascade_1 = require("../utils/cascade");
 function normalizeSymbol(sym) {
     return sym === null || sym === void 0 ? void 0 : sym.trim().toUpperCase();
 }
@@ -205,7 +206,7 @@ function updateAsset(req, res) {
             const updated = yield db_1.db.asset.update({ where: { id }, data: patch });
             res.status(200).json({ data: updated, error: null });
             if (patch.closePrice !== undefined) {
-                cascadeClosePriceUpdate(id, Number(patch.closePrice)).catch((err) => console.error(`[cascadeClosePriceUpdate] assetId=${id}`, err));
+                (0, cascade_1.cascadeClosePriceUpdates)([{ assetId: id, closePrice: Number(patch.closePrice) }]).catch((err) => console.error(`[cascadeClosePriceUpdates] assetId=${id}`, err));
             }
         }
         catch (error) {
@@ -215,58 +216,6 @@ function updateAsset(req, res) {
             console.error("updateAsset error:", error);
             return res.status(500).json({ data: null, error: "Failed to update asset" });
         }
-    });
-}
-function cascadeClosePriceUpdate(assetId, newClosePrice) {
-    return __awaiter(this, void 0, void 0, function* () {
-        console.log(`[cascade] starting closePrice cascade for assetId=${assetId}, newClosePrice=${newClosePrice}`);
-        const [portfolioAssets, userAssets] = yield Promise.all([
-            db_1.db.portfolioAsset.findMany({
-                where: { assetId },
-                select: { id: true, stock: true, costPrice: true },
-            }),
-            db_1.db.userPortfolioAsset.findMany({
-                where: { assetId },
-                select: { id: true, stock: true, costPrice: true, userPortfolioId: true },
-            }),
-        ]);
-        yield Promise.all(portfolioAssets.map((pa) => {
-            var _a;
-            const closeValue = newClosePrice * Number(pa.stock);
-            return db_1.db.portfolioAsset.update({
-                where: { id: pa.id },
-                data: {
-                    closeValue,
-                    lossGain: closeValue - Number((_a = pa.costPrice) !== null && _a !== void 0 ? _a : 0),
-                },
-            });
-        }));
-        yield Promise.all(userAssets.map((ua) => {
-            var _a;
-            const closeValue = newClosePrice * Number(ua.stock);
-            return db_1.db.userPortfolioAsset.update({
-                where: { id: ua.id },
-                data: {
-                    closeValue,
-                    lossGain: closeValue - Number((_a = ua.costPrice) !== null && _a !== void 0 ? _a : 0),
-                },
-            });
-        }));
-        const affectedUserPortfolioIds = [...new Set(userAssets.map((ua) => ua.userPortfolioId))];
-        yield Promise.all(affectedUserPortfolioIds.map((upId) => __awaiter(this, void 0, void 0, function* () {
-            const rows = yield db_1.db.userPortfolioAsset.findMany({
-                where: { userPortfolioId: upId },
-                select: { closeValue: true },
-            });
-            const total = rows.reduce((s, r) => { var _a; return s + Number((_a = r.closeValue) !== null && _a !== void 0 ? _a : 0); }, 0);
-            return db_1.db.userPortfolio.update({
-                where: { id: upId },
-                data: { portfolioValue: total },
-            });
-        })));
-        console.log(`[cascade] done — updated ${portfolioAssets.length} portfolioAssets, ` +
-            `${userAssets.length} userPortfolioAssets, ` +
-            `${affectedUserPortfolioIds.length} userPortfolios`);
     });
 }
 function deleteAsset(req, res) {
@@ -310,16 +259,20 @@ function batchUpdateAssetPrices(req, res) {
                     error: "updates array is required with at least one price update",
                 });
             }
-            const results = yield db_1.db.$transaction(updates.map((update) => db_1.db.asset.update({
-                where: { id: update.assetId },
-                data: { closePrice: Math.max(0, Number(update.closePrice)) },
+            const validUpdates = updates.map((u) => ({
+                assetId: u.assetId,
+                closePrice: Math.max(0, Number(u.closePrice)),
+            }));
+            const results = yield db_1.db.$transaction(validUpdates.map((u) => db_1.db.asset.update({
+                where: { id: u.assetId },
+                data: { closePrice: u.closePrice },
             })));
-            return res.status(200).json({
+            res.status(200).json({
                 data: results,
-                message: `Updated ${results.length} asset prices`,
-                note: "User portfolios will be recalculated on next deposit/withdrawal or manual recompute.",
+                message: `Updated ${results.length} asset prices. Portfolio values are recalculating in the background.`,
                 error: null,
             });
+            (0, cascade_1.cascadeClosePriceUpdates)(validUpdates).catch((err) => console.error(`[cascadeClosePriceUpdates] batch (${validUpdates.length} assets)`, err));
         }
         catch (error) {
             if ((error === null || error === void 0 ? void 0 : error.code) === "P2025") {

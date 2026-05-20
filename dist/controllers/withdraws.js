@@ -50,48 +50,16 @@ function parseIncludeParam(raw) {
 const SORTABLE_FIELDS = new Set([
     "createdAt", "amount", "transactionStatus", "updatedAt",
 ]);
-function recomputePortfolioFromNav(tx, userPortfolioId, newNetAssetValue) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const userPortfolio = yield tx.userPortfolio.findUnique({
-            where: { id: userPortfolioId },
-            include: { userAssets: { include: { asset: { select: { id: true, closePrice: true } } } } },
-        });
-        if (!userPortfolio)
-            return;
-        let totalPortfolioValue = 0;
-        let totalCostPrice = 0;
-        for (const ua of userPortfolio.userAssets) {
-            const costPrice = (ua.allocationPercentage / 100) * newNetAssetValue;
-            const stock = ua.costPerShare > 0 ? costPrice / ua.costPerShare : 0;
-            const closeValue = ua.asset.closePrice * stock;
-            const lossGain = closeValue - costPrice;
-            yield tx.userPortfolioAsset.update({
-                where: { id: ua.id },
-                data: { costPrice, stock, closeValue, lossGain },
-            });
-            totalPortfolioValue += closeValue;
-            totalCostPrice += costPrice;
-        }
-        yield tx.userPortfolio.update({
-            where: { id: userPortfolioId },
-            data: {
-                portfolioValue: totalPortfolioValue,
-                totalInvested: totalCostPrice,
-                totalLossGain: totalPortfolioValue - totalCostPrice,
-            },
-        });
-    });
-}
 function syncMasterWalletNav(tx, userId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const wallets = yield tx.portfolioWallet.findMany({
-            where: { userPortfolio: { userId } },
-            select: { netAssetValue: true },
+        const portfolios = yield tx.userPortfolio.findMany({
+            where: { userId },
+            select: { portfolioValue: true },
         });
-        const totalNav = wallets.reduce((sum, w) => sum + w.netAssetValue, 0);
+        const totalMarketValue = portfolios.reduce((s, p) => { var _a; return s + Number((_a = p.portfolioValue) !== null && _a !== void 0 ? _a : 0); }, 0);
         yield tx.masterWallet.updateMany({
             where: { userId },
-            data: { netAssetValue: totalNav },
+            data: { netAssetValue: totalMarketValue },
         });
     });
 }
@@ -175,7 +143,7 @@ function getWithdrawalById(req, res) {
 }
 function createWithdrawal(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f;
         try {
             const { userId, userPortfolioId, portfolioWalletId, masterWalletId, withdrawalType, amount, referenceNo, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, createdById, createdByName, createdByRole, } = req.body;
             const wType = (withdrawalType === "REDEMPTION" ? "REDEMPTION" : "HARD_WITHDRAWAL");
@@ -193,8 +161,6 @@ function createWithdrawal(req, res) {
             if (!user)
                 return res.status(404).json({ data: null, error: "User not found" });
             const resolvedMasterWalletId = (_b = masterWalletId !== null && masterWalletId !== void 0 ? masterWalletId : (_a = user.masterWallet) === null || _a === void 0 ? void 0 : _a.id) !== null && _b !== void 0 ? _b : null;
-            let resolvedPortfolioWalletId = null;
-            let resolvedUserPortfolioId = userPortfolioId !== null && userPortfolioId !== void 0 ? userPortfolioId : null;
             if (wType === "HARD_WITHDRAWAL") {
                 if (!bankName || !bankAccountName || !bankBranch) {
                     return res.status(400).json({
@@ -205,8 +171,8 @@ function createWithdrawal(req, res) {
                 const created = yield db_1.db.withdrawal.create({
                     data: {
                         userId,
-                        userPortfolioId: resolvedUserPortfolioId,
-                        portfolioWalletId: resolvedPortfolioWalletId,
+                        userPortfolioId: null,
+                        portfolioWalletId: null,
                         masterWalletId: resolvedMasterWalletId,
                         withdrawalType: wType,
                         amount: amt,
@@ -232,10 +198,10 @@ function createWithdrawal(req, res) {
             }
             const up = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
-                include: {
-                    userAssets: { include: { asset: { select: { id: true, closePrice: true } } } },
-                    subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
-                    wallet: { select: { id: true, netAssetValue: true, balance: true } },
+                select: {
+                    id: true, userId: true,
+                    portfolioValue: true,
+                    wallet: { select: { id: true } },
                 },
             });
             if (!up)
@@ -246,19 +212,18 @@ function createWithdrawal(req, res) {
             if (!up.wallet) {
                 return res.status(400).json({ data: null, error: "Portfolio wallet not found" });
             }
-            resolvedPortfolioWalletId = portfolioWalletId !== null && portfolioWalletId !== void 0 ? portfolioWalletId : up.wallet.id;
-            const totalCloseValue = up.userAssets.reduce((sum, ua) => sum + ua.closeValue, 0);
-            if (totalCloseValue < amt) {
+            const maxRedeemable = Number((_d = up.portfolioValue) !== null && _d !== void 0 ? _d : 0);
+            if (amt > maxRedeemable) {
                 return res.status(400).json({
                     data: null,
-                    error: `Insufficient portfolio close value. Available: ${totalCloseValue.toFixed(2)}`,
+                    error: `Redemption amount exceeds portfolio value. Max redeemable: ${maxRedeemable.toFixed(2)}`,
                 });
             }
             const created = yield db_1.db.withdrawal.create({
                 data: {
                     userId,
                     userPortfolioId: userPortfolioId,
-                    portfolioWalletId: resolvedPortfolioWalletId,
+                    portfolioWalletId: portfolioWalletId !== null && portfolioWalletId !== void 0 ? portfolioWalletId : up.wallet.id,
                     masterWalletId: resolvedMasterWalletId,
                     withdrawalType: wType,
                     amount: amt,
@@ -274,7 +239,7 @@ function createWithdrawal(req, res) {
                     description: description !== null && description !== void 0 ? description : null,
                     createdById: createdById !== null && createdById !== void 0 ? createdById : null,
                     createdByName: createdByName !== null && createdByName !== void 0 ? createdByName : null,
-                    createdByRole: (_d = createdByRole) !== null && _d !== void 0 ? _d : null,
+                    createdByRole: (_e = createdByRole) !== null && _e !== void 0 ? _e : null,
                 },
             });
             return res.status(201).json({ data: created, error: null });
@@ -284,7 +249,7 @@ function createWithdrawal(req, res) {
                 return res.status(409).json({ data: null, error: "Duplicate transactionId" });
             }
             console.error("createWithdrawal error:", error);
-            return res.status(500).json({ data: null, error: (_e = error === null || error === void 0 ? void 0 : error.message) !== null && _e !== void 0 ? _e : "Failed to create withdrawal" });
+            return res.status(500).json({ data: null, error: (_f = error === null || error === void 0 ? void 0 : error.message) !== null && _f !== void 0 ? _f : "Failed to create withdrawal" });
         }
     });
 }
@@ -298,10 +263,7 @@ function updateWithdrawal(req, res) {
             if (exists.transactionStatus !== "PENDING") {
                 return res.status(409).json({ data: null, error: "Only PENDING withdrawals can be updated" });
             }
-            const { amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, transactionStatus, } = req.body;
-            if (transactionStatus && asStatus(transactionStatus) !== "PENDING") {
-                return res.status(400).json({ data: null, error: "Use approve/reject endpoints to change status" });
-            }
+            const { amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, } = req.body;
             const data = {};
             if (amount !== undefined) {
                 const a = num(amount, NaN);
@@ -359,9 +321,19 @@ function approveWithdrawal(req, res) {
             if (existing.transactionStatus === "REJECTED") {
                 return res.status(409).json({ data: null, error: "Cannot approve a rejected withdrawal" });
             }
-            if (existing.withdrawalType === "HARD_WITHDRAWAL" && !(transactionId === null || transactionId === void 0 ? void 0 : transactionId.trim())) {
-                return res.status(400).json({ data: null, error: "transactionId is required for HARD_WITHDRAWAL approval" });
+            if (existing.withdrawalType === "HARD_WITHDRAWAL") {
+                if (!(transactionId === null || transactionId === void 0 ? void 0 : transactionId.trim())) {
+                    return res.status(400).json({ data: null, error: "transactionId is required for HARD_WITHDRAWAL approval" });
+                }
+                const balance = (_c = (_b = existing.masterWallet) === null || _b === void 0 ? void 0 : _b.balance) !== null && _c !== void 0 ? _c : 0;
+                if (balance < existing.amount) {
+                    return res.status(400).json({
+                        data: null,
+                        error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
+                    });
+                }
             }
+            let redemptionContext = null;
             if (existing.withdrawalType === "REDEMPTION") {
                 if (!existing.portfolioWallet) {
                     return res.status(400).json({ data: null, error: "No portfolio wallet linked to this redemption" });
@@ -372,59 +344,40 @@ function approveWithdrawal(req, res) {
                 if (!assetPrices || Object.keys(assetPrices).length === 0) {
                     return res.status(400).json({
                         data: null,
-                        error: "assetPrices is required for REDEMPTION approval. Provide closing prices for each asset."
+                        error: "assetPrices is required for REDEMPTION approval. Provide the selling close price for each asset.",
                     });
                 }
-            }
-            if (existing.withdrawalType === "HARD_WITHDRAWAL") {
-                const balance = (_c = (_b = existing.masterWallet) === null || _b === void 0 ? void 0 : _b.balance) !== null && _c !== void 0 ? _c : 0;
-                if (balance < existing.amount) {
-                    return res.status(400).json({
-                        data: null,
-                        error: `Insufficient master wallet balance. Available: ${balance.toFixed(2)}`,
-                    });
-                }
-            }
-            let redemptionData = null;
-            if (existing.withdrawalType === "REDEMPTION") {
                 const up = yield db_1.db.userPortfolio.findUnique({
                     where: { id: existing.userPortfolioId },
                     include: {
                         userAssets: { include: { asset: { select: { id: true, closePrice: true } } } },
                         subPortfolios: { orderBy: { generation: "desc" }, take: 1, select: { generation: true } },
+                        wallet: { select: { id: true, netAssetValue: true, balance: true } },
                     },
                 });
                 if (!up)
                     return res.status(404).json({ data: null, error: "Portfolio not found" });
-                const manualClosePriceByAsset = new Map();
-                let totalCloseValue = 0;
                 for (const ua of up.userAssets) {
-                    const manualPrice = assetPrices === null || assetPrices === void 0 ? void 0 : assetPrices[ua.assetId];
-                    if (manualPrice === undefined || manualPrice <= 0) {
+                    if (assetPrices[ua.assetId] === undefined || assetPrices[ua.assetId] <= 0) {
                         return res.status(400).json({
                             data: null,
-                            error: `Invalid or missing closing price for asset ${ua.assetId}. Admin must provide all asset prices.`,
+                            error: `Missing or invalid close price for asset ${ua.assetId}`,
                         });
                     }
-                    manualClosePriceByAsset.set(ua.assetId, manualPrice);
-                    totalCloseValue += ua.stock * manualPrice;
-                    yield db_1.db.asset.update({
-                        where: { id: ua.assetId },
-                        data: { closePrice: manualPrice },
-                    });
                 }
-                if (totalCloseValue < existing.amount) {
+                const currentPortfolioValue = up.userAssets.reduce((s, ua) => s + Number(ua.closeValue), 0);
+                if (existing.amount > currentPortfolioValue) {
                     return res.status(400).json({
                         data: null,
-                        error: `Insufficient portfolio close value at provided prices. Available: ${totalCloseValue.toFixed(2)}`,
+                        error: `Redemption amount ${existing.amount.toFixed(2)} exceeds portfolio value ${currentPortfolioValue.toFixed(2)}`,
                     });
                 }
-                redemptionData = { userPortfolioWithAssets: up, totalCloseValue, manualClosePriceByAsset };
+                redemptionContext = { up: up };
             }
             const approvalDate = approvedAt ? new Date(approvedAt) : new Date();
             const approved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
                 var _a, _b, _c;
-                const updatedWithdrawal = yield tx.withdrawal.update({
+                const row = yield tx.withdrawal.update({
                     where: { id },
                     data: {
                         transactionStatus: "APPROVED",
@@ -442,69 +395,118 @@ function approveWithdrawal(req, res) {
                             totalWithdrawn: { increment: existing.amount },
                         },
                     });
+                    return row;
                 }
-                else {
-                    const { userPortfolioWithAssets: up, totalCloseValue, manualClosePriceByAsset } = redemptionData;
-                    const newNAV = totalCloseValue - existing.amount;
-                    const totalCostPrice = up.userAssets.reduce((sum, ua) => sum + ua.costPrice, 0);
-                    const nextGeneration = ((_c = (_b = up.subPortfolios[0]) === null || _b === void 0 ? void 0 : _b.generation) !== null && _c !== void 0 ? _c : 0) + 1;
-                    const redemptionSub = yield tx.subPortfolio.create({
+                const { up } = redemptionContext;
+                const redemptionAmount = existing.amount;
+                const nextGeneration = ((_c = (_b = up.subPortfolios[0]) === null || _b === void 0 ? void 0 : _b.generation) !== null && _c !== void 0 ? _c : 0) + 1;
+                const newTotalInvested = Math.max(0, Number(up.totalInvested) - redemptionAmount);
+                const assetResults = up.userAssets.map((ua) => {
+                    const adminClosePrice = assetPrices[ua.assetId];
+                    const allocAmount = (ua.allocationPercentage / 100) * redemptionAmount;
+                    const stocksSold = adminClosePrice > 0 ? allocAmount / adminClosePrice : 0;
+                    const snapCloseValue = adminClosePrice * stocksSold;
+                    const snapLossGain = snapCloseValue - allocAmount;
+                    const newStock = Math.max(0, Number(ua.stock) - stocksSold);
+                    const newCostPrice = (ua.allocationPercentage / 100) * newTotalInvested;
+                    const newCostPerShare = newStock > 0 ? newCostPrice / newStock : 0;
+                    const newCloseValue = Number(ua.asset.closePrice) * newStock;
+                    const newLossGain = newCloseValue - newCostPrice;
+                    return {
+                        id: ua.id,
+                        assetId: ua.assetId,
+                        allocationPercentage: ua.allocationPercentage,
+                        snap: {
+                            stock: stocksSold,
+                            costPrice: allocAmount,
+                            closePrice: adminClosePrice,
+                            closeValue: snapCloseValue,
+                            lossGain: snapLossGain,
+                        },
+                        x2: {
+                            stock: newStock,
+                            costPrice: newCostPrice,
+                            costPerShare: newCostPerShare,
+                            closeValue: newCloseValue,
+                            lossGain: newLossGain,
+                        },
+                    };
+                });
+                const snapTotalCostPrice = assetResults.reduce((s, r) => s + r.snap.costPrice, 0);
+                const snapTotalCloseValue = assetResults.reduce((s, r) => s + r.snap.closeValue, 0);
+                const redemptionSub = yield tx.subPortfolio.create({
+                    data: {
+                        userPortfolioId: existing.userPortfolioId,
+                        generation: nextGeneration,
+                        label: `${up.customName} - Redemption ${nextGeneration}`,
+                        amountInvested: redemptionAmount,
+                        totalCostPrice: snapTotalCostPrice,
+                        totalCloseValue: snapTotalCloseValue,
+                        totalLossGain: snapTotalCloseValue - snapTotalCostPrice,
+                        bankFee: 0,
+                        transactionFee: 0,
+                        feeAtBank: 0,
+                        totalFees: 0,
+                        cashAtBank: 0,
+                        snapshotDate: approvalDate,
+                    },
+                });
+                yield tx.subPortfolioAsset.createMany({
+                    data: assetResults.map((r) => ({
+                        subPortfolioId: redemptionSub.id,
+                        assetId: r.assetId,
+                        allocationPercentage: r.allocationPercentage,
+                        costPerShare: r.snap.closePrice,
+                        costPrice: r.snap.costPrice,
+                        stock: r.snap.stock,
+                        closePrice: r.snap.closePrice,
+                        closeValue: r.snap.closeValue,
+                        lossGain: r.snap.lossGain,
+                    })),
+                    skipDuplicates: true,
+                });
+                for (const r of assetResults) {
+                    yield tx.userPortfolioAsset.update({
+                        where: { id: r.id },
                         data: {
-                            userPortfolioId: existing.userPortfolioId,
-                            generation: nextGeneration,
-                            label: `${up.customName} - Redemption`,
-                            amountInvested: 0,
-                            totalCostPrice,
-                            totalCloseValue,
-                            totalLossGain: totalCloseValue - totalCostPrice,
-                            bankFee: 0,
-                            transactionFee: 0,
-                            feeAtBank: 0,
-                            totalFees: 0,
-                            cashAtBank: 0,
-                            snapshotDate: approvalDate,
+                            stock: r.x2.stock,
+                            costPrice: r.x2.costPrice,
+                            costPerShare: r.x2.costPerShare,
+                            closeValue: r.x2.closeValue,
+                            lossGain: r.x2.lossGain,
                         },
                     });
-                    if (up.userAssets.length > 0) {
-                        yield tx.subPortfolioAsset.createMany({
-                            data: up.userAssets.map((ua) => {
-                                var _a, _b, _c;
-                                return ({
-                                    subPortfolioId: redemptionSub.id,
-                                    assetId: ua.assetId,
-                                    allocationPercentage: ua.allocationPercentage,
-                                    costPerShare: ua.costPerShare,
-                                    costPrice: ua.costPrice,
-                                    stock: ua.stock,
-                                    closePrice: (_a = manualClosePriceByAsset.get(ua.assetId)) !== null && _a !== void 0 ? _a : ua.asset.closePrice,
-                                    closeValue: ua.stock * ((_b = manualClosePriceByAsset.get(ua.assetId)) !== null && _b !== void 0 ? _b : ua.asset.closePrice),
-                                    lossGain: (ua.stock * ((_c = manualClosePriceByAsset.get(ua.assetId)) !== null && _c !== void 0 ? _c : ua.asset.closePrice)) - ua.costPrice,
-                                });
-                            }),
-                            skipDuplicates: true,
-                        });
-                    }
-                    yield tx.portfolioWallet.update({
-                        where: { id: existing.portfolioWallet.id },
-                        data: {
-                            balance: { decrement: existing.amount },
-                            netAssetValue: newNAV,
-                        },
-                    });
-                    yield tx.masterWallet.updateMany({
-                        where: { userId: existing.userId },
-                        data: { balance: { increment: existing.amount } },
-                    });
-                    if (existing.userPortfolioId) {
-                        yield recomputePortfolioFromNav(tx, existing.userPortfolioId, newNAV);
-                    }
-                    yield syncMasterWalletNav(tx, existing.userId);
                 }
-                return updatedWithdrawal;
+                const newPortfolioValue = assetResults.reduce((s, r) => s + r.x2.closeValue, 0);
+                const newTotalLossGain = newPortfolioValue - newTotalInvested;
+                yield tx.userPortfolio.update({
+                    where: { id: existing.userPortfolioId },
+                    data: {
+                        totalInvested: newTotalInvested,
+                        portfolioValue: newPortfolioValue,
+                        totalLossGain: newTotalLossGain,
+                    },
+                });
+                yield tx.portfolioWallet.update({
+                    where: { id: existing.portfolioWallet.id },
+                    data: {
+                        balance: { decrement: redemptionAmount },
+                        netAssetValue: { decrement: redemptionAmount },
+                    },
+                });
+                yield tx.masterWallet.updateMany({
+                    where: { userId: existing.userId },
+                    data: {
+                        balance: { increment: redemptionAmount },
+                        totalWithdrawn: { increment: redemptionAmount },
+                    },
+                });
+                yield syncMasterWalletNav(tx, existing.userId);
+                return row;
             }), { timeout: 30000, maxWait: 35000 });
             res.status(200).json({ data: approved, error: null });
             if (existing.withdrawalType === "REDEMPTION" && existing.userPortfolioId) {
-                (0, portfolio_performance_report_1.regenerateReportForPortfolio)(existing.userPortfolioId).catch((err) => console.error(`[regenerateReport] approveWithdrawal REDEMPTION failed for ${existing.userPortfolioId}:`, err));
+                (0, portfolio_performance_report_1.regenerateReportForPortfolio)(existing.userPortfolioId).catch((err) => console.error(`[regenerateReport] REDEMPTION failed for ${existing.userPortfolioId}:`, err));
             }
         }
         catch (error) {

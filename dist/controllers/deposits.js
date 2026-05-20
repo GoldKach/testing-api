@@ -85,11 +85,6 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
                 closeValue, lossGain,
             };
         });
-        const assetPriceUpdates = Object.entries(assetPrices)
-            .filter(([, p]) => p.closePrice > 0)
-            .map(([assetId, p]) => tx.asset.update({ where: { id: assetId }, data: { closePrice: p.closePrice } }));
-        if (assetPriceUpdates.length)
-            yield Promise.all(assetPriceUpdates);
         const topupStockByAsset = new Map(subAssetRows.map((r) => [r.assetId, r.stock]));
         const subTotalCostPrice = subAssetRows.reduce((s, r) => s + r.costPrice, 0);
         const subTotalCloseValue = subAssetRows.reduce((s, r) => s + r.closeValue, 0);
@@ -115,15 +110,13 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
             });
         }
         const newNetAssetValue = newTotalInvested;
-        const closePriceByAsset = new Map(subAssetRows.map((r) => [r.assetId, r.closePrice]));
         const assetUpdates = up.userAssets.map((ua) => {
-            var _a, _b, _c;
+            var _a, _b;
             const topupStock = (_a = topupStockByAsset.get(ua.assetId)) !== null && _a !== void 0 ? _a : 0;
             const newStock = ((_b = ua.stock) !== null && _b !== void 0 ? _b : 0) + topupStock;
             const costPrice = (ua.allocationPercentage / 100) * newNetAssetValue;
             const costPerShare = newStock > 0 ? costPrice / newStock : 0;
-            const closePrice = (_c = closePriceByAsset.get(ua.assetId)) !== null && _c !== void 0 ? _c : ua.asset.closePrice;
-            const closeValue = closePrice * newStock;
+            const closeValue = ua.asset.closePrice * newStock;
             const lossGain = closeValue - costPrice;
             return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };
         });
@@ -170,14 +163,14 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
 }
 function syncMasterWalletNav(tx, userId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const wallets = yield tx.portfolioWallet.findMany({
-            where: { userPortfolio: { userId } },
-            select: { netAssetValue: true },
+        const portfolios = yield tx.userPortfolio.findMany({
+            where: { userId },
+            select: { portfolioValue: true },
         });
-        const totalNav = wallets.reduce((s, w) => { var _a; return s + ((_a = w.netAssetValue) !== null && _a !== void 0 ? _a : 0); }, 0);
+        const totalMarketValue = portfolios.reduce((s, p) => { var _a; return s + ((_a = p.portfolioValue) !== null && _a !== void 0 ? _a : 0); }, 0);
         yield tx.masterWallet.updateMany({
             where: { userId },
-            data: { netAssetValue: totalNav },
+            data: { netAssetValue: totalMarketValue },
         });
     });
 }
@@ -434,36 +427,49 @@ function approveDeposit(req, res) {
                 }
             }
             const approved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
-                var _a, _b;
-                const row = yield tx.deposit.update({
-                    where: { id },
-                    data: {
-                        transactionStatus: Status.APPROVED,
-                        transactionId: (_a = transactionId !== null && transactionId !== void 0 ? transactionId : existing.transactionId) !== null && _a !== void 0 ? _a : null,
-                        approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
-                        approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
-                        approvedAt: new Date(),
-                    },
-                });
+                var _a, _b, _c;
                 if (existing.depositTarget === "MASTER") {
-                    const depositFees = (_b = existing.totalFees) !== null && _b !== void 0 ? _b : 0;
-                    const netAmount = existing.amount - depositFees;
+                    const fTotalFees = Number((_a = existing.totalFees) !== null && _a !== void 0 ? _a : 0);
+                    const netAmount = existing.amount - fTotalFees;
+                    const row = yield tx.deposit.update({
+                        where: { id },
+                        data: {
+                            transactionStatus: Status.APPROVED,
+                            transactionId: (_b = transactionId !== null && transactionId !== void 0 ? transactionId : existing.transactionId) !== null && _b !== void 0 ? _b : null,
+                            approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
+                            approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
+                            approvedAt: new Date(),
+                        },
+                    });
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
-                        data: Object.assign({ balance: { increment: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { increment: existing.amount } }, (depositFees > 0
-                            ? { totalFees: { increment: depositFees } }
-                            : {})),
+                        data: {
+                            balance: { increment: netAmount >= 0 ? netAmount : 0 },
+                            totalDeposited: { increment: existing.amount },
+                            totalFees: { increment: fTotalFees },
+                        },
                     });
+                    return row;
                 }
                 else {
+                    const row = yield tx.deposit.update({
+                        where: { id },
+                        data: {
+                            transactionStatus: Status.APPROVED,
+                            transactionId: (_c = transactionId !== null && transactionId !== void 0 ? transactionId : existing.transactionId) !== null && _c !== void 0 ? _c : null,
+                            approvedById: approvedById !== null && approvedById !== void 0 ? approvedById : null,
+                            approvedByName: approvedByName !== null && approvedByName !== void 0 ? approvedByName : null,
+                            approvedAt: new Date(),
+                        },
+                    });
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
                         data: { balance: { decrement: existing.amount } },
                     });
                     yield applyTopup(tx, id, existing.userPortfolioId, existing.amount, assetPrices !== null && assetPrices !== void 0 ? assetPrices : {});
                     yield syncMasterWalletNav(tx, existing.userId);
+                    return row;
                 }
-                return row;
             }), { timeout: 30000 });
             const result = yield db_1.db.deposit.findUnique({ where: { id: approved.id }, include: DEPOSIT_INCLUDE });
             return res.status(200).json({ data: result, error: null });
@@ -539,12 +545,15 @@ function reverseDeposit(req, res) {
                     },
                 });
                 if (existing.depositTarget === "MASTER") {
-                    const netAmount = existing.amount - ((_a = existing.totalFees) !== null && _a !== void 0 ? _a : 0);
+                    const fTotalFees = Number((_a = existing.totalFees) !== null && _a !== void 0 ? _a : 0);
+                    const netAmount = existing.amount - fTotalFees;
                     yield tx.masterWallet.updateMany({
                         where: { userId: existing.userId },
-                        data: Object.assign({ balance: { decrement: netAmount > 0 ? netAmount : existing.amount }, totalDeposited: { decrement: existing.amount } }, (existing.totalFees > 0
-                            ? { totalFees: { decrement: existing.totalFees } }
-                            : {})),
+                        data: {
+                            balance: { decrement: netAmount >= 0 ? netAmount : 0 },
+                            totalDeposited: { decrement: existing.amount },
+                            totalFees: { decrement: fTotalFees },
+                        },
                     });
                 }
                 else {
@@ -560,6 +569,24 @@ function reverseDeposit(req, res) {
                                 netAssetValue: { decrement: existing.amount },
                             },
                         });
+                    }
+                    if (existing.userPortfolioId) {
+                        const up = yield tx.userPortfolio.findUnique({
+                            where: { id: existing.userPortfolioId },
+                            select: { totalInvested: true, portfolioValue: true },
+                        });
+                        if (up) {
+                            const newTotalInvested = Math.max(0, Number(up.totalInvested) - existing.amount);
+                            const newPortfolioValue = Math.max(0, Number(up.portfolioValue) - existing.amount);
+                            yield tx.userPortfolio.update({
+                                where: { id: existing.userPortfolioId },
+                                data: {
+                                    totalInvested: newTotalInvested,
+                                    portfolioValue: newPortfolioValue,
+                                    totalLossGain: newPortfolioValue - newTotalInvested,
+                                },
+                            });
+                        }
                     }
                     yield syncMasterWalletNav(tx, existing.userId);
                 }
