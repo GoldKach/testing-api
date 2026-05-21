@@ -155,14 +155,9 @@ function syncMasterWalletForUser(req, res) {
                 return res.status(404).json({ data: null, error: "User not found" });
             const portfolioWallets = yield db_1.db.portfolioWallet.findMany({
                 where: { userPortfolio: { userId } },
-                select: { totalFees: true, balance: true },
+                select: { netAssetValue: true },
             });
-            const userPortfolios = yield db_1.db.userPortfolio.findMany({
-                where: { userId },
-                select: { portfolioValue: true },
-            });
-            const totalNAV = userPortfolios.reduce((s, p) => s + p.portfolioValue, 0);
-            const totalFees = portfolioWallets.reduce((s, w) => s + w.totalFees, 0);
+            const totalNAV = portfolioWallets.reduce((s, w) => s + w.netAssetValue, 0);
             const masterDeposits = yield db_1.db.deposit.findMany({
                 where: { userId, transactionStatus: "APPROVED", depositTarget: "MASTER" },
                 select: { amount: true, totalFees: true },

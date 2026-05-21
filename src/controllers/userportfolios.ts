@@ -170,20 +170,20 @@ async function recomputeUPAsFor(userPortfolioId: string, client: Tx = db) {
 }
 
 /**
- * Sync MasterWallet by summing all PortfolioWallet NAVs for the user.
+ * Sync MasterWallet: netAssetValue = Σ portfolioWallet.netAssetValue.
+ * totalFees (deposit fees) is only updated by the HTTP sync endpoint.
  */
 async function syncMasterWallet(client: Tx, userId: string) {
-  // Sum portfolioValue (market value), not portfolioWallet.netAssetValue (cost-basis NAV)
-  const portfolios = await client.userPortfolio.findMany({
-    where:  { userId },
-    select: { portfolioValue: true },
+  const wallets = await client.portfolioWallet.findMany({
+    where:  { userPortfolio: { userId } },
+    select: { netAssetValue: true },
   });
 
-  const totalMarketValue = portfolios.reduce((sum, p) => sum + toNumber(p.portfolioValue, 0), 0);
+  const totalNAV = wallets.reduce((s, w) => s + toNumber(w.netAssetValue, 0), 0);
 
   await client.masterWallet.updateMany({
     where: { userId },
-    data:  { netAssetValue: totalMarketValue },
+    data:  { netAssetValue: totalNAV },
   });
 }
 

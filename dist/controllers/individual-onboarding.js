@@ -335,7 +335,7 @@ function updateIndividualOnboarding(req, res) {
                 return res.status(404).json({ error: "Individual onboarding record not found." });
             const updateData = {};
             const stringFields = [
-                "fullName", "email", "phoneNumber", "homeAddress", "nationality",
+                "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
                 "countryOfResidence", "employmentStatus", "occupation", "companyName",
                 "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
                 "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
@@ -375,7 +375,6 @@ function updateIndividualOnboarding(req, res) {
             const updated = yield db_1.db.individualOnboarding.update({
                 where: { id },
                 data: updateData,
-                include: { beneficiaries: true, nextOfKin: true },
             });
             return res.status(200).json({ ok: true, data: updated });
         }

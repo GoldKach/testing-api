@@ -387,7 +387,7 @@ export async function updateIndividualOnboarding(req: Request, res: Response) {
     const updateData: Prisma.IndividualOnboardingUpdateInput = {};
 
     const stringFields = [
-      "fullName", "email", "phoneNumber", "homeAddress", "nationality",
+      "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
       "countryOfResidence", "employmentStatus", "occupation", "companyName",
       "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
       "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
@@ -434,7 +434,6 @@ export async function updateIndividualOnboarding(req: Request, res: Response) {
     const updated = await db.individualOnboarding.update({
       where: { id },
       data: updateData,
-      include: { beneficiaries: true, nextOfKin: true },
     });
 
     return res.status(200).json({ ok: true, data: updated });

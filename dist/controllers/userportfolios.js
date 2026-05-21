@@ -137,14 +137,14 @@ function recomputeUPAsFor(userPortfolioId_1) {
 }
 function syncMasterWallet(client, userId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const portfolios = yield client.userPortfolio.findMany({
-            where: { userId },
-            select: { portfolioValue: true },
+        const wallets = yield client.portfolioWallet.findMany({
+            where: { userPortfolio: { userId } },
+            select: { netAssetValue: true },
         });
-        const totalMarketValue = portfolios.reduce((sum, p) => sum + toNumber(p.portfolioValue, 0), 0);
+        const totalNAV = wallets.reduce((s, w) => s + toNumber(w.netAssetValue, 0), 0);
         yield client.masterWallet.updateMany({
             where: { userId },
-            data: { netAssetValue: totalMarketValue },
+            data: { netAssetValue: totalNAV },
         });
     });
 }
