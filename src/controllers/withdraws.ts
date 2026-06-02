@@ -294,12 +294,20 @@ export async function updateWithdrawal(req: Request, res: Response) {
 
     const {
       amount, transactionId, method, accountNo, accountName,
-      bankName, bankAccountName, bankBranch, description,
+      bankName, bankAccountName, bankBranch, description, createdAt,
     } = req.body as Partial<{
       amount: number | string; transactionId: string | null; method: string | null;
       accountNo: string | null; accountName: string | null;
-      bankName: string; bankAccountName: string; bankBranch: string; description: string | null;
+      bankName: string; bankAccountName: string; bankBranch: string;
+      description: string | null; createdAt: string;
     }>;
+
+    // Non-date fields require PENDING status
+    const nonDateFields = [amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description];
+    const hasNonDate = nonDateFields.some((v) => v !== undefined);
+    if (hasNonDate && exists.transactionStatus !== "PENDING") {
+      return res.status(409).json({ data: null, error: "Only PENDING withdrawals can be updated" });
+    }
 
     const data: Prisma.WithdrawalUpdateInput = {};
     if (amount !== undefined) {
@@ -317,6 +325,13 @@ export async function updateWithdrawal(req: Request, res: Response) {
     if (bankAccountName !== undefined) data.bankAccountName = bankAccountName;
     if (bankBranch      !== undefined) data.bankBranch      = bankBranch;
     if (description     !== undefined) data.description     = description;
+
+    // Date update — allowed regardless of status (admin override)
+    if (createdAt !== undefined) {
+      const d = new Date(createdAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ data: null, error: "Invalid createdAt date" });
+      data.createdAt = d;
+    }
 
     const updated = await db.withdrawal.update({ where: { id }, data });
     return res.status(200).json({ data: updated, error: null });

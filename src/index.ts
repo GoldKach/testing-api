@@ -1,5 +1,9 @@
 
 
+// Load .env.local first (local dev), then .env as fallback.
+// On the VPS .env.local doesn't exist so this is a no-op there.
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "..", ".env.local") });
 require("dotenv").config();
 
 import express from "express";
@@ -25,10 +29,14 @@ import migrationsRouter       from "./routes/migrations";
 import sendEmailRouter        from "./routes/send-email";
 
 import { startPortfolioReportCronFromEnv } from "./jobs/portfolio-report-cron";
+import { startLogRetentionJob } from "./jobs/logRetentionJob";
 
 import subPortfoliosRouter from "./routes/subportfolios";
+import sessionsRouter from "./routes/sessions";
 import auditLogsRouter from "./routes/compliance/auditLogs.route";
 import { auditContextMiddleware } from "./audit/auditContext.middleware";
+import { apiAuditMiddleware } from "./middleware/apiAuditMiddleware";
+import { auditService } from "./audit/auditService";
 
 const cors = require("cors");
 
@@ -36,13 +44,31 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+// 1. Extract IP + UA for all audit logging (must be before apiAuditMiddleware)
 app.use(auditContextMiddleware);
+// 2. Log every HTTP request to ApiLog (fire-and-forget, never blocks)
+app.use(apiAuditMiddleware);
 
 const PORT = Number(process.env.PORT) || 8000;
 
 app.listen(PORT, "0.0.0.0", () => {
   startPortfolioReportCronFromEnv();
+  startLogRetentionJob();
   console.log(`Server is running on http://localhost:${PORT}`);
+
+  // Log server startup to SystemLog
+  auditService.logSystem({
+    eventType: "SERVER_STARTED",
+    component: "api-server",
+    severity:  "LOW",
+    message:   `Goldkach API server started on port ${PORT}`,
+    metadata:  {
+      port:      PORT,
+      nodeEnv:   process.env.NODE_ENV ?? "development",
+      version:   process.env.SYSTEM_VERSION ?? "1.0.0",
+      startedAt: new Date().toISOString(),
+    },
+  });
 });
 
 app.get("/health", (_req, res) => {
@@ -71,3 +97,4 @@ app.use("/api/v1", portfolioSummaryRouter);
 app.use("/api/v1", migrationsRouter);
 app.use("/api/v1", sendEmailRouter);
 app.use("/api/v1", auditLogsRouter);
+app.use("/api/v1", sessionsRouter);

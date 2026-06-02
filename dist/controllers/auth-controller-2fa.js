@@ -37,12 +37,15 @@ const client_1 = require("@prisma/client");
 const tokens_1 = require("../utils/tokens");
 const mailer_1 = require("../utils/mailer");
 const mailer_2 = require("../lib/mailer");
+const auditService_1 = require("../audit/auditService");
+const userAgentParser_1 = require("../utils/userAgentParser");
+const geoLocation_1 = require("../utils/geoLocation");
 const RESET_TTL_MIN = 30;
 const LOGIN_CODE_TTL_MIN = 10;
 const makeSixDigitToken = () => String(crypto_1.default.randomInt(0, 1000000)).padStart(6, "0");
 function initiateLogin(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e, _f;
         const { identifier, password } = req.body;
         try {
             if (!identifier || !password) {
@@ -61,7 +64,14 @@ function initiateLogin(req, res) {
                     ],
                 },
             });
+            const auditCtx = req.auditContext;
             if (!user) {
+                auditService_1.auditService.trackFailedLogin({
+                    key: (_a = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress) !== null && _a !== void 0 ? _a : idNorm,
+                    ipAddress: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress,
+                    userAgent: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent,
+                    description: `Login failed: identifier not found (${idNorm})`,
+                });
                 return res.status(401).json({
                     success: false,
                     data: null,
@@ -69,6 +79,15 @@ function initiateLogin(req, res) {
                 });
             }
             if (user.status === client_1.UserStatus.BANNED) {
+                auditService_1.auditService.logSecurity({
+                    eventType: "ACCOUNT_LOCKED",
+                    riskLevel: "HIGH",
+                    userId: user.id,
+                    userEmail: user.email,
+                    ipAddress: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress,
+                    userAgent: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent,
+                    description: "Login attempted on banned account",
+                });
                 return res.status(403).json({
                     success: false,
                     data: null,
@@ -76,6 +95,15 @@ function initiateLogin(req, res) {
                 });
             }
             if (user.status === client_1.UserStatus.SUSPENDED) {
+                auditService_1.auditService.logSecurity({
+                    eventType: "ACCOUNT_LOCKED",
+                    riskLevel: "HIGH",
+                    userId: user.id,
+                    userEmail: user.email,
+                    ipAddress: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress,
+                    userAgent: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent,
+                    description: "Login attempted on suspended account",
+                });
                 return res.status(403).json({
                     success: false,
                     data: null,
@@ -98,6 +126,14 @@ function initiateLogin(req, res) {
             }
             const isPasswordValid = yield bcryptjs_1.default.compare(password, user.password);
             if (!isPasswordValid) {
+                auditService_1.auditService.trackFailedLogin({
+                    key: (_b = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress) !== null && _b !== void 0 ? _b : idNorm,
+                    ipAddress: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress,
+                    userAgent: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent,
+                    userId: user.id,
+                    userEmail: user.email,
+                    description: "Login failed: incorrect password",
+                });
                 return res.status(401).json({
                     success: false,
                     data: null,
@@ -114,7 +150,7 @@ function initiateLogin(req, res) {
                 try {
                     yield (0, mailer_2.sendVerificationCodeResend)({
                         to: user.email,
-                        name: (_b = (_a = user.firstName) !== null && _a !== void 0 ? _a : user.name) !== null && _b !== void 0 ? _b : "there",
+                        name: (_d = (_c = user.firstName) !== null && _c !== void 0 ? _c : user.name) !== null && _d !== void 0 ? _d : "there",
                         code: verificationCode,
                     });
                 }
@@ -151,7 +187,7 @@ function initiateLogin(req, res) {
             try {
                 yield (0, mailer_1.sendLoginVerificationCode)({
                     to: user.email,
-                    name: (_d = (_c = user.firstName) !== null && _c !== void 0 ? _c : user.name) !== null && _d !== void 0 ? _d : "there",
+                    name: (_f = (_e = user.firstName) !== null && _e !== void 0 ? _e : user.name) !== null && _f !== void 0 ? _f : "there",
                     code: verificationCode,
                 });
             }
@@ -186,7 +222,7 @@ function initiateLogin(req, res) {
 }
 function verifyLoginCode(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a;
+        var _a, _b, _c, _d, _e, _f, _g;
         const { userId, code } = req.body;
         try {
             if (!userId || !code) {
@@ -278,12 +314,42 @@ function verifyLoginCode(req, res) {
             };
             const accessToken = (0, tokens_1.generateAccessToken)(payload);
             const refreshToken = (0, tokens_1.generateRefreshToken)(payload);
+            const auditCtxVerify = req.auditContext;
+            const ua = (_b = auditCtxVerify === null || auditCtxVerify === void 0 ? void 0 : auditCtxVerify.userAgent) !== null && _b !== void 0 ? _b : null;
+            const ip = (_c = auditCtxVerify === null || auditCtxVerify === void 0 ? void 0 : auditCtxVerify.ipAddress) !== null && _c !== void 0 ? _c : null;
+            const uaParsed = (0, userAgentParser_1.parseUserAgent)(ua);
+            const geo = yield (0, geoLocation_1.lookupIp)(ip).catch(() => null);
             yield db_1.db.refreshToken.create({
                 data: {
                     token: refreshToken,
                     userId: user.id,
                     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                    ipAddress: ip,
+                    userAgent: ua,
+                    location: (_d = geo === null || geo === void 0 ? void 0 : geo.location) !== null && _d !== void 0 ? _d : null,
+                    country: (_e = geo === null || geo === void 0 ? void 0 : geo.country) !== null && _e !== void 0 ? _e : null,
+                    city: (_f = geo === null || geo === void 0 ? void 0 : geo.city) !== null && _f !== void 0 ? _f : null,
+                    deviceType: uaParsed.deviceType,
+                    browser: uaParsed.browser,
+                    os: uaParsed.os,
                 },
+            });
+            if (auditCtxVerify === null || auditCtxVerify === void 0 ? void 0 : auditCtxVerify.ipAddress) {
+                auditService_1.auditService.clearFailedLogins(auditCtxVerify.ipAddress);
+            }
+            auditService_1.auditService.logAudit({
+                eventType: "LOGIN_SUCCESS",
+                action: `User ${user.email} logged in successfully`,
+                entityType: "User",
+                entityId: user.id,
+                actorId: user.id,
+                actorType: user.role === "USER" ? "CLIENT" : "STAFF",
+                actorRole: user.role,
+                actorName: `${user.firstName} ${(_g = user.lastName) !== null && _g !== void 0 ? _g : ""}`.trim(),
+                actorEmail: user.email,
+                ipAddress: auditCtxVerify === null || auditCtxVerify === void 0 ? void 0 : auditCtxVerify.ipAddress,
+                userAgent: auditCtxVerify === null || auditCtxVerify === void 0 ? void 0 : auditCtxVerify.userAgent,
+                status: "SUCCESS",
             });
             const { password: _pw, token: _token } = user, safeUser = __rest(user, ["password", "token"]);
             return res.status(200).json({
@@ -407,6 +473,16 @@ function forgotPassword(req, res) {
                 name: (_c = (_b = user.name) !== null && _b !== void 0 ? _b : user.firstName) !== null && _c !== void 0 ? _c : "there",
                 resetUrl,
             });
+            auditService_1.auditService.logAudit({
+                eventType: "PASSWORD_RESET_REQUESTED",
+                action: `Password reset email sent to ${user.email}`,
+                entityType: "User",
+                entityId: user.id,
+                actorId: user.id,
+                actorType: "CLIENT",
+                actorEmail: user.email,
+                status: "SUCCESS",
+            });
             return res.status(200).json(generic);
         }
         catch (e) {
@@ -444,6 +520,18 @@ function resetPassword(req, res) {
                 }),
                 db_1.db.refreshToken.deleteMany({ where: { userId: uid } }),
             ]);
+            const auditCtxReset = req.auditContext;
+            auditService_1.auditService.logAudit({
+                eventType: "PASSWORD_RESET_COMPLETED",
+                action: `Password reset completed for user ${uid}`,
+                entityType: "User",
+                entityId: uid,
+                actorId: uid,
+                actorType: "CLIENT",
+                ipAddress: auditCtxReset === null || auditCtxReset === void 0 ? void 0 : auditCtxReset.ipAddress,
+                userAgent: auditCtxReset === null || auditCtxReset === void 0 ? void 0 : auditCtxReset.userAgent,
+                status: "SUCCESS",
+            });
             return res.status(200).json({
                 success: true,
                 message: "Password updated successfully."
@@ -525,6 +613,16 @@ function verifyEmail(req, res) {
             },
         });
         console.log("[verifyEmail] User updated successfully");
+        auditService_1.auditService.logAudit({
+            eventType: "EMAIL_VERIFIED",
+            action: `Email verified for ${user.email}`,
+            entityType: "User",
+            entityId: user.id,
+            actorId: user.id,
+            actorType: "CLIENT",
+            actorEmail: user.email,
+            status: "SUCCESS",
+        });
         return res.status(200).json({
             success: true,
             data: {

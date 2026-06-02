@@ -16,7 +16,7 @@
 
 
 // src/routes/user.routes.ts
-import { createUser, deleteUser, getAllUsers, getCurrentUser, getUserById, loginUser, updateUser } from "@/controllers/users";
+import { createUser, deleteUser, getAllUsers, getCurrentUser, getUserById, loginUser, updateUser, downloadActivityLogsPdf } from "@/controllers/users";
 import { registrationLimiter } from "@/middleware/rate-limit";
 import { authenticateToken } from "@/utils/auth";
 import express from "express";
@@ -45,5 +45,6 @@ userRouter.delete("/users/:id", authenticateToken, deleteUser);
 userRouter.get("/me", authenticateToken, getCurrentUser);
 userRouter.get("/users/:id", getUserById); // ✅ fetch by ID
 userRouter.put("/users/:id", updateUser); // ✅ update user
+userRouter.get("/users/:userId/activity-logs/pdf", downloadActivityLogsPdf);
 
 export default userRouter;

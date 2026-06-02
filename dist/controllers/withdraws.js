@@ -263,7 +263,12 @@ function updateWithdrawal(req, res) {
             if (exists.transactionStatus !== "PENDING") {
                 return res.status(409).json({ data: null, error: "Only PENDING withdrawals can be updated" });
             }
-            const { amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, } = req.body;
+            const { amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description, createdAt, } = req.body;
+            const nonDateFields = [amount, transactionId, method, accountNo, accountName, bankName, bankAccountName, bankBranch, description];
+            const hasNonDate = nonDateFields.some((v) => v !== undefined);
+            if (hasNonDate && exists.transactionStatus !== "PENDING") {
+                return res.status(409).json({ data: null, error: "Only PENDING withdrawals can be updated" });
+            }
             const data = {};
             if (amount !== undefined) {
                 const a = num(amount, NaN);
@@ -288,6 +293,12 @@ function updateWithdrawal(req, res) {
                 data.bankBranch = bankBranch;
             if (description !== undefined)
                 data.description = description;
+            if (createdAt !== undefined) {
+                const d = new Date(createdAt);
+                if (isNaN(d.getTime()))
+                    return res.status(400).json({ data: null, error: "Invalid createdAt date" });
+                data.createdAt = d;
+            }
             const updated = yield db_1.db.withdrawal.update({ where: { id }, data });
             return res.status(200).json({ data: updated, error: null });
         }

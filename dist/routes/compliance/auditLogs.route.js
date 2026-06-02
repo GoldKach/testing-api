@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -312,6 +335,247 @@ auditLogsRouter.get("/compliance/audit-report-data", auth_1.authenticateToken, (
         res
             .status(500)
             .json({ data: null, error: "Failed to fetch audit report data" });
+    }
+}));
+auditLogsRouter.get("/compliance/general-audit-logs", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { page = "1", pageSize = "50", actorId, entityType, entityId, eventType, status, startDate, endDate, search, } = req.query;
+        const take = Math.min(Number(pageSize) || 50, 200);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+        const where = {};
+        if (actorId)
+            where.actorId = actorId;
+        if (entityType)
+            where.entityType = entityType;
+        if (entityId)
+            where.entityId = entityId;
+        if (eventType)
+            where.eventType = eventType;
+        if (status)
+            where.status = status;
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate)
+                where.createdAt.gte = new Date(startDate);
+            if (endDate)
+                where.createdAt.lte = new Date(endDate);
+        }
+        if (search) {
+            where.OR = [
+                { action: { contains: search, mode: "insensitive" } },
+                { actorName: { contains: search, mode: "insensitive" } },
+                { actorEmail: { contains: search, mode: "insensitive" } },
+                { entityId: { contains: search, mode: "insensitive" } },
+                { ipAddress: { contains: search, mode: "insensitive" } },
+            ];
+        }
+        const table = db_1.db.auditLog;
+        const [total, rows] = yield Promise.all([
+            table.count({ where }),
+            table.findMany({ where, orderBy: { timestamp: "desc" }, skip, take }),
+        ]);
+        res.json({
+            data: {
+                rows,
+                total,
+                page: Math.max(Number(page) || 1, 1),
+                pageSize: take,
+                totalPages: Math.ceil(total / take),
+            },
+            error: null,
+        });
+    }
+    catch (err) {
+        console.error("[general-audit-logs] error", err);
+        res.status(500).json({ data: null, error: "Failed to fetch general audit logs" });
+    }
+}));
+auditLogsRouter.get("/compliance/general-audit-logs/export", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    try {
+        const { actorId, entityType, entityId, eventType, startDate, endDate } = req.query;
+        const where = {};
+        if (actorId)
+            where.actorId = actorId;
+        if (entityType)
+            where.entityType = entityType;
+        if (entityId)
+            where.entityId = entityId;
+        if (eventType)
+            where.eventType = eventType;
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate)
+                where.createdAt.gte = new Date(startDate);
+            if (endDate)
+                where.createdAt.lte = new Date(endDate);
+        }
+        const rows = yield db_1.db.auditLog.findMany({
+            where,
+            orderBy: { timestamp: "asc" },
+            take: 10000,
+        });
+        const headers = [
+            "id", "timestamp", "eventType", "action", "entityType", "entityId",
+            "actorId", "actorType", "actorRole", "actorName", "actorEmail",
+            "ipAddress", "status", "errorMessage", "createdAt",
+        ];
+        const csvEscape = (v) => {
+            const s = v == null ? "" : String(v);
+            return s.includes(",") || s.includes('"') || s.includes("\n")
+                ? `"${s.replace(/"/g, '""')}"`
+                : s;
+        };
+        const lines = [
+            headers.join(","),
+            ...rows.map((r) => headers.map((h) => csvEscape(r[h])).join(",")),
+        ];
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="general-audit-log-${new Date().toISOString().slice(0, 10)}.csv"`);
+        res.send(lines.join("\r\n"));
+        const { auditService } = yield Promise.resolve().then(() => __importStar(require("../../audit/auditService")));
+        auditService.logAudit({
+            eventType: "DATA_EXPORTED",
+            action: `General audit log exported (${rows.length} rows)`,
+            actorId: (_a = req.user) === null || _a === void 0 ? void 0 : _a.userId,
+            actorRole: (_b = req.user) === null || _b === void 0 ? void 0 : _b.role,
+            actorType: "STAFF",
+            status: "SUCCESS",
+            metadata: { rowCount: rows.length, filters: { actorId, entityType, eventType, startDate, endDate } },
+        });
+    }
+    catch (err) {
+        console.error("[general-audit-logs/export] error", err);
+        res.status(500).json({ data: null, error: "Failed to export general audit logs" });
+    }
+}));
+auditLogsRouter.get("/compliance/security-logs", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { page = "1", pageSize = "50", userId, eventType, riskLevel, ipAddress, resolved, startDate, endDate, } = req.query;
+        const take = Math.min(Number(pageSize) || 50, 200);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+        const where = {};
+        if (userId)
+            where.userId = userId;
+        if (eventType)
+            where.eventType = eventType;
+        if (riskLevel)
+            where.riskLevel = riskLevel;
+        if (ipAddress)
+            where.ipAddress = ipAddress;
+        if (resolved !== undefined)
+            where.resolved = resolved === "true";
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate)
+                where.createdAt.gte = new Date(startDate);
+            if (endDate)
+                where.createdAt.lte = new Date(endDate);
+        }
+        const table = db_1.db.securityLog;
+        const [total, rows] = yield Promise.all([
+            table.count({ where }),
+            table.findMany({ where, orderBy: { timestamp: "desc" }, skip, take }),
+        ]);
+        res.json({
+            data: { rows, total, page: Math.max(Number(page) || 1, 1), pageSize: take, totalPages: Math.ceil(total / take) },
+            error: null,
+        });
+    }
+    catch (err) {
+        console.error("[security-logs] error", err);
+        res.status(500).json({ data: null, error: "Failed to fetch security logs" });
+    }
+}));
+auditLogsRouter.get("/compliance/security-logs/summary", auth_1.authenticateToken, (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const table = db_1.db.securityLog;
+        const [critical, high, medium, low, unresolved] = yield Promise.all([
+            table.count({ where: { riskLevel: "CRITICAL", createdAt: { gte: since } } }),
+            table.count({ where: { riskLevel: "HIGH", createdAt: { gte: since } } }),
+            table.count({ where: { riskLevel: "MEDIUM", createdAt: { gte: since } } }),
+            table.count({ where: { riskLevel: "LOW", createdAt: { gte: since } } }),
+            table.count({ where: { resolved: false } }),
+        ]);
+        res.json({
+            data: { since, critical, high, medium, low, unresolved },
+            error: null,
+        });
+    }
+    catch (err) {
+        console.error("[security-logs/summary] error", err);
+        res.status(500).json({ data: null, error: "Failed to fetch security log summary" });
+    }
+}));
+auditLogsRouter.get("/compliance/api-logs", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { page = "1", pageSize = "50", userId, method, endpoint, statusCode, startDate, endDate, } = req.query;
+        const take = Math.min(Number(pageSize) || 50, 200);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+        const where = {};
+        if (userId)
+            where.userId = userId;
+        if (method)
+            where.method = method.toUpperCase();
+        if (endpoint)
+            where.endpoint = { contains: endpoint, mode: "insensitive" };
+        if (statusCode)
+            where.statusCode = Number(statusCode);
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate)
+                where.createdAt.gte = new Date(startDate);
+            if (endDate)
+                where.createdAt.lte = new Date(endDate);
+        }
+        const table = db_1.db.apiLog;
+        const [total, rows] = yield Promise.all([
+            table.count({ where }),
+            table.findMany({ where, orderBy: { timestamp: "desc" }, skip, take }),
+        ]);
+        res.json({
+            data: { rows, total, page: Math.max(Number(page) || 1, 1), pageSize: take, totalPages: Math.ceil(total / take) },
+            error: null,
+        });
+    }
+    catch (err) {
+        console.error("[api-logs] error", err);
+        res.status(500).json({ data: null, error: "Failed to fetch API logs" });
+    }
+}));
+auditLogsRouter.get("/compliance/system-logs", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { page = "1", pageSize = "50", eventType, component, severity, startDate, endDate, } = req.query;
+        const take = Math.min(Number(pageSize) || 50, 200);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+        const where = {};
+        if (eventType)
+            where.eventType = eventType;
+        if (component)
+            where.component = { contains: component, mode: "insensitive" };
+        if (severity)
+            where.severity = severity;
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate)
+                where.createdAt.gte = new Date(startDate);
+            if (endDate)
+                where.createdAt.lte = new Date(endDate);
+        }
+        const table = db_1.db.systemLog;
+        const [total, rows] = yield Promise.all([
+            table.count({ where }),
+            table.findMany({ where, orderBy: { timestamp: "desc" }, skip, take }),
+        ]);
+        res.json({
+            data: { rows, total, page: Math.max(Number(page) || 1, 1), pageSize: take, totalPages: Math.ceil(total / take) },
+            error: null,
+        });
+    }
+    catch (err) {
+        console.error("[system-logs] error", err);
+        res.status(500).json({ data: null, error: "Failed to fetch system logs" });
     }
 }));
 exports.default = auditLogsRouter;

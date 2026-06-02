@@ -8,6 +8,10 @@ import jwt from "jsonwebtoken";
 import { generateAccessToken, generateRefreshToken, TokenPayload } from "@/utils/tokens";
 import { sendLoginVerificationCode } from "@/utils/mailer";
 import { sendResetEmailResend, sendVerificationCodeResend } from "@/lib/mailer";
+import { auditService } from "@/audit/auditService";
+import type { AuthRequest } from "@/utils/auth";
+import { parseUserAgent } from "@/utils/userAgentParser";
+import { lookupIp } from "@/utils/geoLocation";
 
 const RESET_TTL_MIN = 30;
 const LOGIN_CODE_TTL_MIN = 10; // 10 minutes for login verification
@@ -46,54 +50,89 @@ export async function initiateLogin(req: Request, res: Response) {
       },
     });
 
+    const auditCtx = (req as AuthRequest).auditContext;
+
     if (!user) {
-      return res.status(401).json({ 
+      // Track failed login by IP for brute-force detection
+      auditService.trackFailedLogin({
+        key:         auditCtx?.ipAddress ?? idNorm,
+        ipAddress:   auditCtx?.ipAddress,
+        userAgent:   auditCtx?.userAgent,
+        description: `Login failed: identifier not found (${idNorm})`,
+      });
+      return res.status(401).json({
         success: false,
-        data: null, 
-        error: "Invalid credentials" 
+        data: null,
+        error: "Invalid credentials"
       });
     }
 
     // Check account status
     if (user.status === UserStatus.BANNED) {
-      return res.status(403).json({ 
+      auditService.logSecurity({
+        eventType:   "ACCOUNT_LOCKED",
+        riskLevel:   "HIGH",
+        userId:      user.id,
+        userEmail:   user.email,
+        ipAddress:   auditCtx?.ipAddress,
+        userAgent:   auditCtx?.userAgent,
+        description: "Login attempted on banned account",
+      });
+      return res.status(403).json({
         success: false,
-        data: null, 
-        error: "Account has been banned. Contact support." 
+        data: null,
+        error: "Account has been banned. Contact support."
       });
     }
 
     if (user.status === UserStatus.SUSPENDED) {
-      return res.status(403).json({ 
+      auditService.logSecurity({
+        eventType:   "ACCOUNT_LOCKED",
+        riskLevel:   "HIGH",
+        userId:      user.id,
+        userEmail:   user.email,
+        ipAddress:   auditCtx?.ipAddress,
+        userAgent:   auditCtx?.userAgent,
+        description: "Login attempted on suspended account",
+      });
+      return res.status(403).json({
         success: false,
-        data: null, 
-        error: "Account is temporarily suspended. Contact support." 
+        data: null,
+        error: "Account is temporarily suspended. Contact support."
       });
     }
 
     if (user.status === UserStatus.DEACTIVATED) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        data: null, 
-        error: "Account is deactivated. Contact support to reactivate." 
+        data: null,
+        error: "Account is deactivated. Contact support to reactivate."
       });
     }
 
     // Verify password
     if (!user.password) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        data: null, 
-        error: "This account has no password. Use social login or reset password." 
+        data: null,
+        error: "This account has no password. Use social login or reset password."
       });
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      return res.status(401).json({ 
+      auditService.trackFailedLogin({
+        key:         auditCtx?.ipAddress ?? idNorm,
+        ipAddress:   auditCtx?.ipAddress,
+        userAgent:   auditCtx?.userAgent,
+        userId:      user.id,
+        userEmail:   user.email,
+        description: "Login failed: incorrect password",
+      });
+      return res.status(401).json({
         success: false,
-        data: null, 
-        error: "Invalid credentials" 
+        data: null,
+        error: "Invalid credentials"
       });
     }
 
@@ -309,13 +348,48 @@ export async function verifyLoginCode(req: Request, res: Response) {
     const accessToken = generateAccessToken(payload);
     const refreshToken = generateRefreshToken(payload);
 
-    // Store refresh token
+    // Clear any tracked failed-login attempts for this user's IP
+    const auditCtxVerify = (req as AuthRequest).auditContext;
+
+    // Capture session metadata (IP, UA, geo-location) — geo-lookup is async
+    const ua       = auditCtxVerify?.userAgent ?? null;
+    const ip       = auditCtxVerify?.ipAddress ?? null;
+    const uaParsed = parseUserAgent(ua);
+    const geo      = await lookupIp(ip).catch(() => null);
+
     await db.refreshToken.create({
       data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        token:      refreshToken,
+        userId:     user.id,
+        expiresAt:  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        ipAddress:  ip,
+        userAgent:  ua,
+        location:   geo?.location ?? null,
+        country:    geo?.country  ?? null,
+        city:       geo?.city     ?? null,
+        deviceType: uaParsed.deviceType,
+        browser:    uaParsed.browser,
+        os:         uaParsed.os,
       },
+    });
+    if (auditCtxVerify?.ipAddress) {
+      auditService.clearFailedLogins(auditCtxVerify.ipAddress);
+    }
+
+    // Log successful login
+    auditService.logAudit({
+      eventType:  "LOGIN_SUCCESS",
+      action:     `User ${user.email} logged in successfully`,
+      entityType: "User",
+      entityId:   user.id,
+      actorId:    user.id,
+      actorType:  user.role === "USER" ? "CLIENT" : "STAFF",
+      actorRole:  user.role,
+      actorName:  `${user.firstName} ${user.lastName ?? ""}`.trim(),
+      actorEmail: user.email,
+      ipAddress:  auditCtxVerify?.ipAddress,
+      userAgent:  auditCtxVerify?.userAgent,
+      status:     "SUCCESS",
     });
 
     // Return safe user data without password
@@ -323,10 +397,10 @@ export async function verifyLoginCode(req: Request, res: Response) {
 
     return res.status(200).json({
       success: true,
-      data: { 
-        user: safeUser, 
-        accessToken, 
-        refreshToken 
+      data: {
+        user: safeUser,
+        accessToken,
+        refreshToken
       },
       message: "Login successful",
     });
@@ -461,6 +535,17 @@ export async function forgotPassword(req: Request, res: Response) {
       resetUrl,
     });
 
+    auditService.logAudit({
+      eventType:  "PASSWORD_RESET_REQUESTED",
+      action:     `Password reset email sent to ${user.email}`,
+      entityType: "User",
+      entityId:   user.id,
+      actorId:    user.id,
+      actorType:  "CLIENT",
+      actorEmail: user.email,
+      status:     "SUCCESS",
+    });
+
     return res.status(200).json(generic);
   } catch (e) {
     console.error("forgotPassword error:", e);
@@ -503,16 +588,29 @@ export async function resetPassword(req: Request, res: Response) {
 
     await db.$transaction([
       db.user.update({ where: { id: uid }, data: { password: hashed } }),
-      db.passwordResetToken.update({ 
-        where: { id: record.id }, 
-        data: { usedAt: new Date() } 
+      db.passwordResetToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() }
       }),
-      db.refreshToken.deleteMany({ where: { userId: uid } }), // revoke sessions
+      db.refreshToken.deleteMany({ where: { userId: uid } }),
     ]);
 
-    return res.status(200).json({ 
-      success: true, 
-      message: "Password updated successfully." 
+    const auditCtxReset = (req as AuthRequest).auditContext;
+    auditService.logAudit({
+      eventType:  "PASSWORD_RESET_COMPLETED",
+      action:     `Password reset completed for user ${uid}`,
+      entityType: "User",
+      entityId:   uid,
+      actorId:    uid,
+      actorType:  "CLIENT",
+      ipAddress:  auditCtxReset?.ipAddress,
+      userAgent:  auditCtxReset?.userAgent,
+      status:     "SUCCESS",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password updated successfully."
     });
   } catch (e) {
     console.error("resetPassword error:", e);
@@ -600,14 +698,25 @@ export async function verifyEmail(req: Request, res: Response) {
 
   await db.user.update({
     where: { id: user.id },
-    data: { 
-      emailVerified: true, 
-      status: UserStatus.ACTIVE, 
-      token: null 
+    data: {
+      emailVerified: true,
+      status: UserStatus.ACTIVE,
+      token: null
     },
   });
 
   console.log("[verifyEmail] User updated successfully");
+
+  auditService.logAudit({
+    eventType:  "EMAIL_VERIFIED",
+    action:     `Email verified for ${user.email}`,
+    entityType: "User",
+    entityId:   user.id,
+    actorId:    user.id,
+    actorType:  "CLIENT",
+    actorEmail: user.email,
+    status:     "SUCCESS",
+  });
 
   return res.status(200).json({
     success: true,

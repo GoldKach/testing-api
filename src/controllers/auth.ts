@@ -9,6 +9,9 @@ import {sendVerificationCodeResend } from "@/lib/mailer";
 import { UserStatus } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken, TokenPayload } from "@/utils/tokens";
+import type { AuthRequest } from "@/utils/auth";
+import { parseUserAgent } from "@/utils/userAgentParser";
+import { lookupIp } from "@/utils/geoLocation";
 
 
 const RESET_TTL_MIN = 30;
@@ -138,9 +141,9 @@ export async function resendVerification(req: Request, res: Response) {
 }
 
 
-export async function verifyEmail(req: Request, res: Response) {
+export async function verifyEmail(req: AuthRequest, res: Response) {
   const { email, token } = req.body as { email: string; token: string };
- 
+
   console.log("[verifyEmail] Received request — email:", email, "token:", token);
  
   if (!email || !token) {
@@ -188,11 +191,25 @@ export async function verifyEmail(req: Request, res: Response) {
   const accessToken = generateAccessToken(payload);
   const refreshToken = generateRefreshToken(payload);
 
+  const auditCtx  = req.auditContext;
+  const ip        = auditCtx?.ipAddress ?? null;
+  const ua        = auditCtx?.userAgent ?? null;
+  const uaParsed  = parseUserAgent(ua);
+  const geo       = await lookupIp(ip).catch(() => null);
+
   await db.refreshToken.create({
     data: {
-      token: refreshToken,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      token:      refreshToken,
+      userId:     user.id,
+      expiresAt:  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      ipAddress:  ip,
+      userAgent:  ua,
+      location:   geo?.location ?? null,
+      country:    geo?.country  ?? null,
+      city:       geo?.city     ?? null,
+      deviceType: uaParsed.deviceType,
+      browser:    uaParsed.browser,
+      os:         uaParsed.os,
     },
   });
 

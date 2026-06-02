@@ -24,6 +24,8 @@ const mailer_1 = require("../utils/mailer");
 const mailer_2 = require("../lib/mailer");
 const client_1 = require("@prisma/client");
 const tokens_1 = require("../utils/tokens");
+const userAgentParser_1 = require("../utils/userAgentParser");
+const geoLocation_1 = require("../utils/geoLocation");
 const RESET_TTL_MIN = 30;
 function forgotPassword(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -117,6 +119,7 @@ function resendVerification(req, res) {
 }
 function verifyEmail(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e;
         const { email, token } = req.body;
         console.log("[verifyEmail] Received request — email:", email, "token:", token);
         if (!email || !token) {
@@ -153,11 +156,24 @@ function verifyEmail(req, res) {
         };
         const accessToken = (0, tokens_1.generateAccessToken)(payload);
         const refreshToken = (0, tokens_1.generateRefreshToken)(payload);
+        const auditCtx = req.auditContext;
+        const ip = (_a = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress) !== null && _a !== void 0 ? _a : null;
+        const ua = (_b = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent) !== null && _b !== void 0 ? _b : null;
+        const uaParsed = (0, userAgentParser_1.parseUserAgent)(ua);
+        const geo = yield (0, geoLocation_1.lookupIp)(ip).catch(() => null);
         yield db_1.db.refreshToken.create({
             data: {
                 token: refreshToken,
                 userId: user.id,
                 expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                ipAddress: ip,
+                userAgent: ua,
+                location: (_c = geo === null || geo === void 0 ? void 0 : geo.location) !== null && _c !== void 0 ? _c : null,
+                country: (_d = geo === null || geo === void 0 ? void 0 : geo.country) !== null && _d !== void 0 ? _d : null,
+                city: (_e = geo === null || geo === void 0 ? void 0 : geo.city) !== null && _e !== void 0 ? _e : null,
+                deviceType: uaParsed.deviceType,
+                browser: uaParsed.browser,
+                os: uaParsed.os,
             },
         });
         return res.status(200).json({

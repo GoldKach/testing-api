@@ -3,6 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "..", ".env.local") });
 require("dotenv").config();
 const express_1 = __importDefault(require("express"));
 const users_1 = __importDefault(require("./routes/users"));
@@ -24,18 +26,37 @@ const portfolio_summary_1 = __importDefault(require("./routes/portfolio-summary"
 const migrations_1 = __importDefault(require("./routes/migrations"));
 const send_email_1 = __importDefault(require("./routes/send-email"));
 const portfolio_report_cron_1 = require("./jobs/portfolio-report-cron");
+const logRetentionJob_1 = require("./jobs/logRetentionJob");
 const subportfolios_1 = __importDefault(require("./routes/subportfolios"));
+const sessions_1 = __importDefault(require("./routes/sessions"));
 const auditLogs_route_1 = __importDefault(require("./routes/compliance/auditLogs.route"));
 const auditContext_middleware_1 = require("./audit/auditContext.middleware");
+const apiAuditMiddleware_1 = require("./middleware/apiAuditMiddleware");
+const auditService_1 = require("./audit/auditService");
 const cors = require("cors");
 const app = (0, express_1.default)();
 app.use(cors());
 app.use(express_1.default.json());
 app.use(auditContext_middleware_1.auditContextMiddleware);
+app.use(apiAuditMiddleware_1.apiAuditMiddleware);
 const PORT = Number(process.env.PORT) || 8000;
 app.listen(PORT, "0.0.0.0", () => {
+    var _a, _b;
     (0, portfolio_report_cron_1.startPortfolioReportCronFromEnv)();
+    (0, logRetentionJob_1.startLogRetentionJob)();
     console.log(`Server is running on http://localhost:${PORT}`);
+    auditService_1.auditService.logSystem({
+        eventType: "SERVER_STARTED",
+        component: "api-server",
+        severity: "LOW",
+        message: `Goldkach API server started on port ${PORT}`,
+        metadata: {
+            port: PORT,
+            nodeEnv: (_a = process.env.NODE_ENV) !== null && _a !== void 0 ? _a : "development",
+            version: (_b = process.env.SYSTEM_VERSION) !== null && _b !== void 0 ? _b : "1.0.0",
+            startedAt: new Date().toISOString(),
+        },
+    });
 });
 app.get("/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
@@ -60,3 +81,4 @@ app.use("/api/v1", portfolio_summary_1.default);
 app.use("/api/v1", migrations_1.default);
 app.use("/api/v1", send_email_1.default);
 app.use("/api/v1", auditLogs_route_1.default);
+app.use("/api/v1", sessions_1.default);

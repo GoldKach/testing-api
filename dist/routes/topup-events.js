@@ -6,4 +6,5 @@ const topupEventsRouter = (0, express_1.Router)();
 topupEventsRouter.get("/topup-events", topup_events_1.listTopupEvents);
 topupEventsRouter.get("/topup-events/portfolio/:userPortfolioId", topup_events_1.getTopupTimeline);
 topupEventsRouter.get("/topup-events/:id", topup_events_1.getTopupEventById);
+topupEventsRouter.patch("/topup-events/:id/date", topup_events_1.updateTopupEventDate);
 exports.default = topupEventsRouter;

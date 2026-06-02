@@ -364,10 +364,12 @@ function updateDeposit(req, res) {
             const existing = yield db_1.db.deposit.findUnique({ where: { id } });
             if (!existing)
                 return res.status(404).json({ data: null, error: "Deposit not found" });
-            if (existing.transactionStatus !== Status.PENDING) {
+            const { amount, transactionId, mobileNo, referenceNo, accountNo, method, description, createdAt, } = req.body;
+            const nonDateFields = [amount, transactionId, mobileNo, referenceNo, accountNo, method, description];
+            const hasNonDate = nonDateFields.some((v) => v !== undefined);
+            if (hasNonDate && existing.transactionStatus !== Status.PENDING) {
                 return res.status(409).json({ data: null, error: "Only PENDING deposits can be updated" });
             }
-            const { amount, transactionId, mobileNo, referenceNo, accountNo, method, description, } = req.body;
             const data = {};
             if (amount !== undefined) {
                 const a = num(amount, NaN);
@@ -388,6 +390,12 @@ function updateDeposit(req, res) {
                 data.method = method;
             if (description !== undefined)
                 data.description = description;
+            if (createdAt !== undefined) {
+                const d = new Date(createdAt);
+                if (isNaN(d.getTime()))
+                    return res.status(400).json({ data: null, error: "Invalid createdAt date" });
+                data.createdAt = d;
+            }
             const updated = yield db_1.db.deposit.update({ where: { id }, data, include: DEPOSIT_INCLUDE });
             return res.status(200).json({ data: updated, error: null });
         }

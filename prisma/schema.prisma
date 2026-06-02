@@ -177,10 +177,25 @@ model RefreshToken {
   userId    String
   expiresAt DateTime
   revoked   Boolean  @default(false)
+  revokedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Session metadata captured at login
+  ipAddress  String?
+  userAgent  String?
+  location   String?  // "Kampala, Uganda" from geo-lookup
+  country    String?
+  city       String?
+  deviceType String?  // "Desktop" | "Mobile" | "Tablet"
+  browser    String?  // "Chrome 120"
+  os         String?  // "Windows 11"
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([revoked])
 }
 
 model PasswordResetToken {
@@ -1128,6 +1143,242 @@ model CompanyUBO {
 //   individualOnboardingClients IndividualOnboarding[] @relation("IndividualOnboardingAgent")
 //   companyOnboardingClients    CompanyOnboarding[]    @relation("CompanyOnboardingAgent")
 // =====================
+
+// =====================
+// Audit Logging Enums
+// =====================
+
+enum AuditEventType {
+  // ── Auth ──────────────────────────────────────────────
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  ACCOUNT_LOCKED
+  TOKEN_REFRESHED
+  TOKEN_REVOKED
+  EMAIL_VERIFIED
+
+  // ── User / Profile ────────────────────────────────────
+  PROFILE_UPDATED
+  EMAIL_CHANGED
+  PHONE_CHANGED
+  SETTINGS_UPDATED
+
+  // ── KYC / Onboarding ──────────────────────────────────
+  KYC_SUBMITTED
+  KYC_APPROVED
+  KYC_REJECTED
+  KYC_UPDATED
+  DOCUMENT_UPLOADED
+  BENEFICIARY_ADDED
+  BENEFICIARY_UPDATED
+  BENEFICIARY_REMOVED
+  NEXT_OF_KIN_ADDED
+  NEXT_OF_KIN_UPDATED
+  NEXT_OF_KIN_REMOVED
+
+  // ── Admin Actions ─────────────────────────────────────
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  ROLE_CHANGED
+  STATUS_CHANGED
+  ACCOUNT_SUSPENDED
+  ACCOUNT_REACTIVATED
+  ACCOUNT_BANNED
+
+  // ── Staff / Agent ─────────────────────────────────────
+  STAFF_CREATED
+  STAFF_UPDATED
+  AGENT_ASSIGNED
+  AGENT_UNASSIGNED
+
+  // ── Financial (cross-ref to TransactionAuditLog) ──────
+  DEPOSIT_INITIATED
+  DEPOSIT_APPROVED
+  DEPOSIT_REJECTED
+  DEPOSIT_REVERSED
+  WITHDRAWAL_REQUESTED
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+  PORTFOLIO_ALLOCATED
+  FEE_DEDUCTED
+
+  // ── Reporting / Export ────────────────────────────────
+  DATA_EXPORTED
+  REPORT_GENERATED
+  CONFIGURATION_CHANGED
+}
+
+enum SecurityEventType {
+  LOGIN_FAILED
+  BRUTE_FORCE_DETECTED
+  ACCOUNT_LOCKED
+  UNAUTHORIZED_ACCESS
+  INVALID_TOKEN
+  TOKEN_MISUSE
+  SUSPICIOUS_ACTIVITY
+  PRIVILEGE_ESCALATION_ATTEMPT
+  RATE_LIMIT_EXCEEDED
+  RECAPTCHA_FAILED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SystemEventType {
+  SERVER_STARTED
+  SERVER_STOPPED
+  SERVER_ERROR
+  CRON_JOB_STARTED
+  CRON_JOB_COMPLETED
+  CRON_JOB_FAILED
+  BACKUP_COMPLETED
+  BACKUP_FAILED
+  DATABASE_MIGRATION
+  DEPLOYMENT_COMPLETED
+}
+
+// =====================
+// General Audit Log
+// Append-only: no UPDATE or DELETE should ever run on this table.
+// Captures all non-financial events for compliance and regulator inspection.
+// Retention: 7 years.
+// =====================
+
+model AuditLog {
+  id        String         @id @default(uuid())
+  timestamp DateTime       @default(now())
+  eventType AuditEventType
+  action    String         // Human-readable: "Approved deposit of $5,000 for user Jane Doe"
+
+  // Affected entity
+  entityType String? // "User", "Deposit", "UserPortfolio", "IndividualOnboarding"
+  entityId   String? // PK of the affected record
+
+  // Actor (who did this)
+  actorId    String? // userId of the person who performed the action
+  actorType  String? // "ADMIN" | "STAFF" | "CLIENT" | "SYSTEM"
+  actorRole  String? // role at the time of the action (denormalised)
+  actorName  String?
+  actorEmail String?
+
+  // Request context
+  ipAddress String?
+  userAgent String?
+  requestId String? // links to ApiLog.requestId
+
+  // Diff tracking — populated for every UPDATE event
+  oldValues Json? // JSONB: state before the change
+  newValues Json? // JSONB: state after the change
+
+  // Outcome
+  status       String? // "SUCCESS" | "FAILURE" | "PARTIAL"
+  errorMessage String?
+
+  // Extra structured data (portfolio names, amounts, etc.)
+  metadata Json?
+
+  // Optional cross-reference to the financial chain log
+  transactionAuditId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([actorId])
+  @@index([entityId])
+  @@index([entityType, entityId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+// =====================
+// Security Log
+// Retention: 7 years.
+// =====================
+
+model SecurityLog {
+  id          String            @id @default(uuid())
+  timestamp   DateTime          @default(now())
+  eventType   SecurityEventType
+  userId      String? // null for unauthenticated / anonymous events
+  userName    String?
+  userEmail   String?
+  ipAddress   String?
+  userAgent   String?
+  riskLevel   RiskLevel         @default(LOW)
+  description String?
+  metadata    Json?
+  resolved    Boolean           @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  createdAt   DateTime          @default(now())
+
+  @@index([timestamp])
+  @@index([userId])
+  @@index([eventType])
+  @@index([ipAddress])
+  @@index([riskLevel])
+  @@index([createdAt])
+}
+
+// =====================
+// API Request Log
+// Every inbound HTTP request. High-volume — retention: 1 year.
+// =====================
+
+model ApiLog {
+  id           String   @id @default(uuid())
+  requestId    String   @unique @default(uuid())
+  timestamp    DateTime @default(now())
+  method       String
+  endpoint     String
+  statusCode   Int?
+  durationMs   Int?
+  userId       String?
+  userRole     String?
+  ipAddress    String?
+  userAgent    String?
+  // Sanitised request body: passwords, tokens, codes are masked before storage
+  requestBody  Json?
+  errorMessage String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([userId])
+  @@index([endpoint])
+  @@index([statusCode])
+  @@index([createdAt])
+}
+
+// =====================
+// System Event Log
+// Server lifecycle, cron jobs, backup events. Retention: 1 year.
+// =====================
+
+model SystemLog {
+  id        String          @id @default(uuid())
+  timestamp DateTime        @default(now())
+  eventType SystemEventType
+  component String // "api-server" | "cron-job:portfolio-report" | "backup-service"
+  severity  RiskLevel       @default(LOW)
+  message   String
+  metadata  Json?
+  createdAt DateTime        @default(now())
+
+  @@index([timestamp])
+  @@index([eventType])
+  @@index([component])
+  @@index([createdAt])
+}
 
 // =====================
 // CMA Audit Log (Immutable, tamper-evident chain)

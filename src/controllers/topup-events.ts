@@ -136,3 +136,38 @@ export async function getTopupTimeline(req: Request, res: Response) {
     return res.status(500).json({ data: null, error: "Failed to fetch top-up timeline" });
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  UPDATE DATE  PATCH /topup-events/:id/date                           */
+/* ------------------------------------------------------------------ */
+export async function updateTopupEventDate(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { createdAt, mergedAt } = req.body as { createdAt?: string; mergedAt?: string };
+
+    const existing = await db.topupEvent.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ data: null, error: "Topup event not found" });
+
+    const data: Prisma.TopupEventUpdateInput = {};
+    if (createdAt !== undefined) {
+      const d = new Date(createdAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ data: null, error: "Invalid createdAt date" });
+      data.createdAt = d;
+    }
+    if (mergedAt !== undefined) {
+      const d = new Date(mergedAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ data: null, error: "Invalid mergedAt date" });
+      data.mergedAt = d;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ data: null, error: "No date fields provided" });
+    }
+
+    const updated = await db.topupEvent.update({ where: { id }, data, include: TOPUP_INCLUDE });
+    return res.status(200).json({ data: updated, error: null });
+  } catch (err) {
+    console.error("updateTopupEventDate error:", err);
+    return res.status(500).json({ data: null, error: "Failed to update topup event date" });
+  }
+}

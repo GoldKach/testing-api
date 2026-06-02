@@ -53,10 +53,14 @@ exports.getCurrentUser = getCurrentUser;
 exports.getUserById = getUserById;
 exports.updateUser = updateUser;
 exports.deleteUser = deleteUser;
+exports.downloadActivityLogsPdf = downloadActivityLogsPdf;
 const db_1 = require("../db/db");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const crypto_1 = __importStar(require("crypto"));
+const pdfkit_1 = __importDefault(require("pdfkit"));
 const tokens_1 = require("../utils/tokens");
+const userAgentParser_1 = require("../utils/userAgentParser");
+const geoLocation_1 = require("../utils/geoLocation");
 const client_1 = require("@prisma/client");
 const mailer_1 = require("../lib/mailer");
 const recaptcha_1 = require("../utils/recaptcha");
@@ -389,6 +393,7 @@ function createUser(req, res) {
 }
 function loginUser(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e;
         const { identifier, password } = req.body;
         try {
             if (!identifier || !password) {
@@ -410,8 +415,25 @@ function loginUser(req, res) {
             const payload = { userId: user.id, phone: user.phone, email: user.email, role: user.role };
             const accessToken = (0, tokens_1.generateAccessToken)(payload);
             const refreshToken = (0, tokens_1.generateRefreshToken)(payload);
+            const auditCtx = req.auditContext;
+            const ip = (_a = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress) !== null && _a !== void 0 ? _a : null;
+            const ua = (_b = auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent) !== null && _b !== void 0 ? _b : null;
+            const uaParsed = (0, userAgentParser_1.parseUserAgent)(ua);
+            const geo = yield (0, geoLocation_1.lookupIp)(ip).catch(() => null);
             yield db_1.db.refreshToken.create({
-                data: { token: refreshToken, userId: user.id, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+                data: {
+                    token: refreshToken,
+                    userId: user.id,
+                    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                    ipAddress: ip,
+                    userAgent: ua,
+                    location: (_c = geo === null || geo === void 0 ? void 0 : geo.location) !== null && _c !== void 0 ? _c : null,
+                    country: (_d = geo === null || geo === void 0 ? void 0 : geo.country) !== null && _d !== void 0 ? _d : null,
+                    city: (_e = geo === null || geo === void 0 ? void 0 : geo.city) !== null && _e !== void 0 ? _e : null,
+                    deviceType: uaParsed.deviceType,
+                    browser: uaParsed.browser,
+                    os: uaParsed.os,
+                },
             });
             const { password: _pw } = user, safe = __rest(user, ["password"]);
             return res.status(200).json({ data: { user: safe, accessToken, refreshToken }, error: null });
@@ -585,6 +607,181 @@ function deleteUser(req, res) {
         catch (error) {
             console.error("Error deleting user:", error);
             return res.status(500).json({ data: null, error: "Failed to delete user" });
+        }
+    });
+}
+const PDF_NAVY = "#1B3A6B";
+const PDF_BLUE = "#2E6DA4";
+const PDF_ROW_A = "#F0F4FA";
+const PDF_BORDER = "#D0D8E8";
+const PAGE_W = 595;
+const PAGE_H = 842;
+const MARGIN = 36;
+const CONTENT_W = PAGE_W - MARGIN * 2;
+const BOTTOM_LIMIT = PAGE_H - 44;
+function pdfFmtDate(d) {
+    return d.toLocaleString("en-GB", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+    }) + " UTC";
+}
+function pdfTrunc(s, max) {
+    if (!s)
+        return "-";
+    return s.length > max ? s.slice(0, max - 1) + "." : s;
+}
+function drawActivityFooter(doc, pageNum, generatedDate) {
+    const fy = PAGE_H - 30;
+    doc.moveTo(MARGIN, fy).lineTo(PAGE_W - MARGIN, fy).lineWidth(0.4).stroke(PDF_BORDER);
+    doc.fillColor("#888888").font("Helvetica").fontSize(7)
+        .text(`GoldKach Investment Ltd  -  Confidential  -  Generated ${generatedDate}`, MARGIN, fy + 5, { width: CONTENT_W - 60, lineBreak: false });
+    doc.text(`Page ${pageNum}`, PAGE_W - MARGIN - 50, fy + 5, {
+        width: 50, align: "right", lineBreak: false,
+    });
+}
+function drawTableHeader(doc, colX, colW, y, rowH) {
+    doc.rect(MARGIN, y, CONTENT_W, rowH).fill(PDF_NAVY);
+    doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(7);
+    doc.text("DATE (UTC)", colX.date + 3, y + 5, { width: colW.date - 4, lineBreak: false });
+    doc.text("ACTION", colX.action + 3, y + 5, { width: colW.action - 4, lineBreak: false });
+    doc.text("MODULE", colX.module + 3, y + 5, { width: colW.module - 4, lineBreak: false });
+    doc.text("STATUS", colX.status + 3, y + 5, { width: colW.status - 4, lineBreak: false });
+    doc.text("IP ADDRESS", colX.ip + 3, y + 5, { width: colW.ip - 4, lineBreak: false });
+    doc.text("DESCRIPTION", colX.desc + 3, y + 5, { width: colW.desc - 4, lineBreak: false });
+    return y + rowH;
+}
+function downloadActivityLogsPdf(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
+        const { userId } = req.params;
+        const { startDate, endDate, limit: limitParam, } = req.query;
+        try {
+            const user = yield db_1.db.user.findUnique({
+                where: { id: userId },
+                select: {
+                    id: true, firstName: true, lastName: true, email: true, role: true,
+                    masterWallet: { select: { accountNumber: true } },
+                },
+            });
+            if (!user)
+                return res.status(404).json({ error: "User not found" });
+            const limit = Math.min(Number(limitParam) || 500, 2000);
+            const dateFilter = {};
+            if (startDate)
+                dateFilter.gte = new Date(startDate);
+            if (endDate)
+                dateFilter.lte = new Date(endDate);
+            const logs = yield db_1.db.activityLog.findMany({
+                where: Object.assign({ userId }, (Object.keys(dateFilter).length ? { createdAt: dateFilter } : {})),
+                orderBy: { createdAt: "desc" },
+                take: limit,
+            });
+            const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email;
+            const generatedAt = new Date();
+            const genDateStr = generatedAt.toISOString().slice(0, 10);
+            const dateRange = startDate || endDate
+                ? `${startDate !== null && startDate !== void 0 ? startDate : "-"} to ${endDate !== null && endDate !== void 0 ? endDate : "-"}`
+                : "All time";
+            const doc = new pdfkit_1.default({ size: "A4", margin: MARGIN, autoFirstPage: true });
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="activity-log-${displayName.replace(/\s+/g, "-")}-${genDateStr}.pdf"`);
+            doc.pipe(res);
+            doc.rect(0, 0, PAGE_W, 68).fill(PDF_NAVY);
+            doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(15)
+                .text("GOLDKACH INVESTMENT", MARGIN, 16, { width: 280, lineBreak: false });
+            doc.fillColor("#AAC4E8").font("Helvetica").fontSize(8)
+                .text("Unlocking Global Investments", MARGIN, 34, { lineBreak: false });
+            doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(12)
+                .text("User Activity Log", PAGE_W - MARGIN - 160, 18, { width: 160, align: "right", lineBreak: false });
+            doc.fillColor("#AAC4E8").font("Helvetica").fontSize(7)
+                .text(`Generated: ${pdfFmtDate(generatedAt)}`, PAGE_W - MARGIN - 160, 34, {
+                width: 160, align: "right", lineBreak: false,
+            });
+            let y = 84;
+            const infoH = 68;
+            doc.rect(MARGIN, y, CONTENT_W, infoH).fill("#F7F9FC");
+            doc.rect(MARGIN, y, CONTENT_W, infoH).lineWidth(0.5).stroke(PDF_BORDER);
+            doc.fillColor(PDF_NAVY).font("Helvetica-Bold").fontSize(8)
+                .text("CLIENT INFORMATION", MARGIN + 10, y + 8, { lineBreak: false });
+            const c1 = MARGIN + 10, c2 = MARGIN + 185, c3 = MARGIN + 370;
+            const r1y = y + 22, r2y = y + 46;
+            const infoCell = (label, val, x, iy) => {
+                doc.fillColor("#777777").font("Helvetica").fontSize(6.5)
+                    .text(label, x, iy, { lineBreak: false });
+                doc.fillColor("#111111").font("Helvetica-Bold").fontSize(8.5)
+                    .text(val, x, iy + 9, { width: 170, lineBreak: false });
+            };
+            infoCell("CLIENT NAME", displayName, c1, r1y);
+            infoCell("EMAIL", user.email, c2, r1y);
+            infoCell("ACCOUNT NO.", (_b = (_a = user.masterWallet) === null || _a === void 0 ? void 0 : _a.accountNumber) !== null && _b !== void 0 ? _b : "-", c3, r1y);
+            infoCell("DATE RANGE", dateRange, c1, r2y);
+            infoCell("ROLE", user.role, c2, r2y);
+            infoCell("TOTAL ENTRIES", String(logs.length), c3, r2y);
+            y += infoH + 6;
+            const successCount = logs.filter(l => { var _a; return ((_a = l.status) !== null && _a !== void 0 ? _a : "").toUpperCase() === "SUCCESS"; }).length;
+            const failCount = logs.filter(l => { var _a; return ["FAILED", "ERROR"].includes(((_a = l.status) !== null && _a !== void 0 ? _a : "").toUpperCase()); }).length;
+            const otherCount = logs.length - successCount - failCount;
+            doc.rect(MARGIN, y, CONTENT_W, 26).fill(PDF_BLUE);
+            doc.fillColor("#FFFFFF").font("Helvetica").fontSize(8);
+            doc.text(`Total: ${logs.length}`, c1, y + 9, { lineBreak: false });
+            doc.text(`Success: ${successCount}`, c1 + 120, y + 9, { lineBreak: false });
+            doc.text(`Failed/Error: ${failCount}`, c2 + 20, y + 9, { lineBreak: false });
+            doc.text(`Other: ${otherCount}`, c3, y + 9, { lineBreak: false });
+            y += 34;
+            const colW = { date: 108, action: 128, module: 76, status: 58, ip: 80, desc: CONTENT_W - 108 - 128 - 76 - 58 - 80 };
+            const colX = {
+                date: MARGIN,
+                action: MARGIN + colW.date,
+                module: MARGIN + colW.date + colW.action,
+                status: MARGIN + colW.date + colW.action + colW.module,
+                ip: MARGIN + colW.date + colW.action + colW.module + colW.status,
+                desc: MARGIN + colW.date + colW.action + colW.module + colW.status + colW.ip,
+            };
+            const ROW_H = 16;
+            let pageNum = 1;
+            y = drawTableHeader(doc, colX, colW, y, ROW_H + 2);
+            if (logs.length === 0) {
+                doc.rect(MARGIN, y, CONTENT_W, 40).fill("#F9FAFB");
+                doc.fillColor("#9CA3AF").font("Helvetica").fontSize(9)
+                    .text("No activity logs found for the selected criteria.", MARGIN, y + 14, {
+                    width: CONTENT_W, align: "center",
+                });
+            }
+            for (let i = 0; i < logs.length; i++) {
+                if (y + ROW_H > BOTTOM_LIMIT) {
+                    drawActivityFooter(doc, pageNum, genDateStr);
+                    pageNum++;
+                    doc.addPage();
+                    y = MARGIN;
+                    y = drawTableHeader(doc, colX, colW, y, ROW_H + 2);
+                }
+                const log = logs[i];
+                const rowBg = i % 2 === 0 ? PDF_ROW_A : "#FFFFFF";
+                const stUC = ((_c = log.status) !== null && _c !== void 0 ? _c : "").toUpperCase();
+                const stColor = stUC === "SUCCESS" ? "#15803D"
+                    : stUC === "FAILED" || stUC === "ERROR" ? "#DC2626"
+                        : "#92400E";
+                doc.rect(MARGIN, y, CONTENT_W, ROW_H).fill(rowBg);
+                doc.rect(MARGIN, y, CONTENT_W, ROW_H).lineWidth(0.3).stroke(PDF_BORDER);
+                doc.fillColor("#333333").font("Helvetica").fontSize(6.5)
+                    .text(pdfFmtDate(log.createdAt), colX.date + 3, y + 5, { width: colW.date - 4, lineBreak: false });
+                doc.text(pdfTrunc(log.action, 24), colX.action + 3, y + 5, { width: colW.action - 4, lineBreak: false });
+                doc.text(pdfTrunc(log.module, 13), colX.module + 3, y + 5, { width: colW.module - 4, lineBreak: false });
+                doc.fillColor(stColor).font("Helvetica-Bold")
+                    .text(pdfTrunc(log.status, 10), colX.status + 3, y + 5, { width: colW.status - 4, lineBreak: false });
+                doc.fillColor("#333333").font("Helvetica")
+                    .text(pdfTrunc(log.ipAddress, 15), colX.ip + 3, y + 5, { width: colW.ip - 4, lineBreak: false });
+                doc.text(pdfTrunc(log.description, 11), colX.desc + 3, y + 5, { width: colW.desc - 4, lineBreak: false });
+                y += ROW_H;
+            }
+            drawActivityFooter(doc, pageNum, genDateStr);
+            doc.end();
+        }
+        catch (error) {
+            console.error("downloadActivityLogsPdf error:", error);
+            if (!res.headersSent) {
+                res.status(500).json({ error: "Failed to generate activity log PDF" });
+            }
         }
     });
 }
