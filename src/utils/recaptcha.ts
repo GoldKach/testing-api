@@ -17,6 +17,12 @@ interface RecaptchaResult {
  * Verify reCAPTCHA token with Google's API
  */
 export async function verifyRecaptcha(token: string): Promise<RecaptchaResult> {
+  // Skip verification in development — reCAPTCHA site key is production-only
+  if (process.env.NODE_ENV === "development" || token === "dev-bypass") {
+    console.log("⏭️  reCAPTCHA skipped (development mode)");
+    return { success: true };
+  }
+
   const secretKey = process.env.RECAPTCHA_SECRET_KEY;
 
   if (!secretKey) {

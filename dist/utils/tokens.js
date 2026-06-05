@@ -9,7 +9,7 @@ exports.verifyAccessToken = verifyAccessToken;
 exports.verifyRefreshToken = verifyRefreshToken;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const ACCESS_TOKEN_OPTIONS = {
-    expiresIn: "60m",
+    expiresIn: "8h",
 };
 const REFRESH_TOKEN_OPTIONS = {
     expiresIn: "30d",

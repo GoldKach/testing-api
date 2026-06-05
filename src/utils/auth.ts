@@ -23,8 +23,8 @@ export function authenticateToken(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ error: "No token provided" });
   }
 
-  // Tokens are signed with JWT_SECRET (see src/lib/tokens.ts generateAccessToken)
-  const secret = process.env.JWT_SECRET ?? process.env.ACCESS_TOKEN_SECRET ?? "";
+  // Tokens are signed with ACCESS_TOKEN_SECRET (see src/utils/tokens.ts generateAccessToken)
+  const secret = process.env.ACCESS_TOKEN_SECRET ?? process.env.JWT_SECRET ?? "";
   jwt.verify(token, secret, (err, decoded) => {
     if (err || !decoded) {
       return res.status(403).json({ error: "Invalid or expired token" });

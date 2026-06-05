@@ -21,7 +21,8 @@ export function authenticateToken(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ error: "No token provided" });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET as string, (err, decoded) => {
+  const secret = process.env.ACCESS_TOKEN_SECRET ?? process.env.JWT_SECRET ?? "";
+  jwt.verify(token, secret, (err, decoded) => {
     if (err || !decoded) {
       return res.status(403).json({ error: "Invalid or expired token" });
     }

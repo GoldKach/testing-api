@@ -12,7 +12,7 @@ function authenticateToken(req, res, next) {
     if (!token) {
         return res.status(401).json({ error: "No token provided" });
     }
-    const secret = (_b = (_a = process.env.JWT_SECRET) !== null && _a !== void 0 ? _a : process.env.ACCESS_TOKEN_SECRET) !== null && _b !== void 0 ? _b : "";
+    const secret = (_b = (_a = process.env.ACCESS_TOKEN_SECRET) !== null && _a !== void 0 ? _a : process.env.JWT_SECRET) !== null && _b !== void 0 ? _b : "";
     jsonwebtoken_1.default.verify(token, secret, (err, decoded) => {
         if (err || !decoded) {
             return res.status(403).json({ error: "Invalid or expired token" });

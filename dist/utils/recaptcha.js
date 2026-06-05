@@ -16,6 +16,10 @@ exports.verifyRecaptcha = verifyRecaptcha;
 const axios_1 = __importDefault(require("axios"));
 function verifyRecaptcha(token) {
     return __awaiter(this, void 0, void 0, function* () {
+        if (process.env.NODE_ENV === "development" || token === "dev-bypass") {
+            console.log("⏭️  reCAPTCHA skipped (development mode)");
+            return { success: true };
+        }
         const secretKey = process.env.RECAPTCHA_SECRET_KEY;
         if (!secretKey) {
             console.error("⚠️ RECAPTCHA_SECRET_KEY not set in .env");

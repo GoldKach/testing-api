@@ -12,7 +12,7 @@ interface TokenOptions extends SignOptions {} // Ensure compatibility with jwt.S
 
  
 const ACCESS_TOKEN_OPTIONS: TokenOptions = {
-  expiresIn: "60m", // 15 minutes
+  expiresIn: "8h", // 8 hours — covers onboarding + full workday session
 };
  
 const REFRESH_TOKEN_OPTIONS: TokenOptions = {
