@@ -152,14 +152,13 @@ async function recomputeUPAsFor(userPortfolioId: string, client: Tx = db) {
     totalCostPrice      += costPrice;
   }
 
-  // totalInvested = NAV + totalFees (NAV is stored on the wallet)
-  const totalInvested = nav + toNumber(up.wallet.totalFees, 0);
+  // totalInvested (Initial Investment) = cumulative deposits; never overwritten here
+  const totalInvested = toNumber(up.totalInvested, 0);
 
   await client.userPortfolio.update({
     where: { id: up.id },
     data: {
       portfolioValue: totalPortfolioValue,
-      totalInvested,
       totalLossGain:  totalPortfolioValue - totalInvested,
     },
   });
@@ -588,15 +587,13 @@ export async function updateUserPortfolio(req: Request, res: Response) {
         const totalClose = allAssets.reduce((s, a) => s + toNumber(a.closeValue, 0), 0);
         const totalCost  = allAssets.reduce((s, a) => s + toNumber(a.costPrice, 0), 0);
 
-        // totalCost = Σ(alloc% × NAV) = NAV; totalInvested = NAV + totalFees
-        const walletTotalFees = toNumber(current.wallet?.totalFees, 0);
-        const totalInvested   = totalCost + walletTotalFees;
+        // totalInvested (Initial Investment) = cumulative deposits; never overwritten here
+        const totalInvested = toNumber(current.totalInvested, 0);
 
         await tx.userPortfolio.update({
           where: { id },
-          data:  { portfolioValue: totalClose, totalInvested, totalLossGain: totalClose - totalInvested },
+          data:  { portfolioValue: totalClose, totalLossGain: totalClose - totalInvested },
         });
-        // NAV is fixed (totalInvested − totalFees) — do not overwrite with market value
       }
 
       // Full recompute from current wallet NAV

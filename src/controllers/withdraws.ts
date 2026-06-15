@@ -370,8 +370,7 @@ export async function updateWithdrawal(req: Request, res: Response) {
  *
  *   New portfolio (X2 — remaining position):
  *     stock         = oldStock − stocksSold
- *     totalInvested = oldTotalInvested − redemptionAmount
- *     costPrice     = alloc% × newTotalInvested
+ *     costPrice     = alloc% × (oldTotalInvested − redemptionAmount)
  *     costPerShare  = newCostPrice / newStock
  *     closeValue    = asset.closePrice × newStock   ← system price, never the approval price
  *     lossGain      = closeValue − costPrice
@@ -615,7 +614,6 @@ export async function approveWithdrawal(req: Request, res: Response) {
       await tx.userPortfolio.update({
         where: { id: existing.userPortfolioId! },
         data: {
-          totalInvested:  newTotalInvested,
           portfolioValue: newPortfolioValue,
           totalLossGain:  newTotalLossGain,
         },
