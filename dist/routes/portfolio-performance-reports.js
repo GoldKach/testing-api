@@ -8,6 +8,7 @@ portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/latest/:us
 portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/stats/:userPortfolioId", portfolio_performance_reports_1.getPerformanceStatistics);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate", portfolio_performance_reports_1.generatePerformanceReport);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate-all", portfolio_performance_reports_1.generateAllPerformanceReports);
+portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate-all-for-date", portfolio_performance_reports_1.generateAllPortfoliosForDate);
 portfolioPerformanceReportsRouter.delete("/portfolio-performance-reports/cleanup", portfolio_performance_reports_1.cleanupPerformanceReports);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/backfill-snapshots", portfolio_performance_reports_1.backfillAssetSnapshots);
 portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/:id", portfolio_performance_reports_1.getPerformanceReportById);

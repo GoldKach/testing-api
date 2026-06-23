@@ -493,7 +493,6 @@ function approveWithdrawal(req, res) {
                 yield tx.userPortfolio.update({
                     where: { id: existing.userPortfolioId },
                     data: {
-                        totalInvested: newTotalInvested,
                         portfolioValue: newPortfolioValue,
                         totalLossGain: newTotalLossGain,
                     },
@@ -509,7 +508,6 @@ function approveWithdrawal(req, res) {
                     where: { userId: existing.userId },
                     data: {
                         balance: { increment: redemptionAmount },
-                        totalWithdrawn: { increment: redemptionAmount },
                     },
                 });
                 yield syncMasterWalletNav(tx, existing.userId);

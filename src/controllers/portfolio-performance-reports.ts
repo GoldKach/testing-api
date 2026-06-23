@@ -863,8 +863,10 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
   let success = 0, failed = 0;
   const errors: string[] = [];
 
-  const reportDate = new Date();
-  reportDate.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
+  // Use local calendar date components so that servers in non-UTC timezones (e.g. EAT UTC+3)
+  // store the report under the correct local date rather than the previous UTC day.
+  const _rNow = new Date();
+  const reportDate = new Date(Date.UTC(_rNow.getFullYear(), _rNow.getMonth(), _rNow.getDate()));
 
   for (const portfolio of allPortfolios) {
     try {
@@ -898,6 +900,64 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
 }
 
 /* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate-all-for-date          */
+/*  Regenerate reports for ALL portfolios for a specific date,         */
+/*  replacing any existing report to capture current close prices.     */
+/* ------------------------------------------------------------------ */
+export async function generateAllPortfoliosForDate(req: Request, res: Response) {
+  try {
+    const { reportDate: reportDateStr } = req.body as { reportDate?: string };
+
+    if (!reportDateStr) {
+      return res.status(400).json({ data: null, error: "reportDate is required" });
+    }
+
+    // Normalise to UTC midnight of the supplied calendar date
+    const d = new Date(reportDateStr);
+    const reportDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const nextDay    = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+
+    const allPortfolios = await db.userPortfolio.findMany({
+      where:  { isActive: true },
+      select: { id: true },
+    });
+
+    let success = 0, failed = 0;
+    const errors: string[] = [];
+
+    for (const portfolio of allPortfolios) {
+      try {
+        // Remove any existing report for this date so we get fresh close prices
+        await db.userPortfolioPerformanceReport.deleteMany({
+          where: {
+            userPortfolioId: portfolio.id,
+            reportDate: { gte: reportDate, lt: nextDay },
+          },
+        });
+
+        const reportId = await generateAndSaveReport(portfolio.id, reportDate);
+        if (reportId) success++;
+        else {
+          failed++;
+          errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
+        }
+      } catch (err: any) {
+        failed++;
+        errors.push(`Portfolio ${portfolio.id}: ${err.message}`);
+      }
+    }
+
+    return res.status(200).json({
+      data: { total: allPortfolios.length, success, failed, errors },
+      error: null,
+    });
+  } catch (error) {
+    console.error("generateAllPortfoliosForDate error:", error);
+    return res.status(500).json({ data: null, error: "Failed to generate reports for date" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Shared report include                                               */
 /* ------------------------------------------------------------------ */
 const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
@@ -926,8 +986,12 @@ export async function generatePerformanceReport(req: Request, res: Response) {
     });
     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
 
-    const date = reportDate ? new Date(reportDate) : new Date();
-    date.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
+    // For a user-supplied ISO date ("2026-06-20"), use UTC components (it parses as UTC midnight).
+    // For auto-generated date, use LOCAL components to handle non-UTC server TZ (e.g. EAT UTC+3).
+    const _d = reportDate ? new Date(reportDate) : new Date();
+    const date = reportDate
+      ? new Date(Date.UTC(_d.getUTCFullYear(), _d.getUTCMonth(), _d.getUTCDate()))
+      : new Date(Date.UTC(_d.getFullYear(), _d.getMonth(), _d.getDate()));
 
     const reportId = await generateAndSaveReport(userPortfolioId, date);
     if (!reportId) {
@@ -1209,8 +1273,10 @@ export async function generateDailyReportsForUser(userId: string): Promise<{
     orderBy: { createdAt: "asc" },
   });
 
-  const reportDate = new Date();
-  reportDate.setUTCHours(0, 0, 0, 0); // UTC midnight — consistent with list query date range
+  // Use local calendar date components so servers in non-UTC timezones (e.g. EAT UTC+3)
+  // store the report under the correct local date rather than the previous UTC day.
+  const _rNow2 = new Date();
+  const reportDate = new Date(Date.UTC(_rNow2.getFullYear(), _rNow2.getMonth(), _rNow2.getDate()));
 
   let success = 0, skipped = 0, failed = 0;
   const errors: string[] = [];

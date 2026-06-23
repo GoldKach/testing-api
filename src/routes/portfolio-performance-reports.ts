@@ -5,6 +5,7 @@ import {
   getPerformanceReportById,
   generatePerformanceReport,
   generateAllPerformanceReports,
+  generateAllPortfoliosForDate,
   getLatestPerformanceReport,
   getPerformanceStatistics,
   cleanupPerformanceReports,
@@ -43,6 +44,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/generate-all",
   generateAllPerformanceReports
+);
+
+// Regenerate reports for ALL portfolios for a specific date (replaces existing)
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-all-for-date",
+  generateAllPortfoliosForDate
 );
 
 // Cleanup old reports

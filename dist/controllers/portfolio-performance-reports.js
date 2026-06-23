@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateDailyReportsForAllPortfolios = generateDailyReportsForAllPortfolios;
+exports.generateAllPortfoliosForDate = generateAllPortfoliosForDate;
 exports.generatePerformanceReport = generatePerformanceReport;
 exports.generateUserPerformanceReports = generateUserPerformanceReports;
 exports.generateAllPerformanceReports = generateAllPerformanceReports;
@@ -42,7 +43,7 @@ function determineAssetClass(asset) {
 }
 function generatePortfolioReport(userPortfolioId_1) {
     return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date()) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        var _a, _b, _c, _e, _f, _g, _h, _j, _k;
         try {
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
@@ -64,8 +65,8 @@ function generatePortfolioReport(userPortfolioId_1) {
             const totalFees = (_a = wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _a !== void 0 ? _a : 0;
             const walletBalance = (_b = wallet === null || wallet === void 0 ? void 0 : wallet.balance) !== null && _b !== void 0 ? _b : 0;
             const bankCost = (_c = wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _c !== void 0 ? _c : 0;
-            const transactionCost = (_d = wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _d !== void 0 ? _d : 0;
-            const cashAtBank = (_e = wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _e !== void 0 ? _e : 0;
+            const transactionCost = (_e = wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _e !== void 0 ? _e : 0;
+            const cashAtBank = (_f = wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _f !== void 0 ? _f : 0;
             if (userPortfolio.userAssets.length === 0) {
                 return {
                     userPortfolioId,
@@ -91,13 +92,13 @@ function generatePortfolioReport(userPortfolioId_1) {
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
             for (const ua of userPortfolio.userAssets) {
-                totalCostPrice += (_f = ua.costPrice) !== null && _f !== void 0 ? _f : 0;
-                totalCloseValue += (_g = ua.closeValue) !== null && _g !== void 0 ? _g : 0;
-                totalLossGain += (_h = ua.lossGain) !== null && _h !== void 0 ? _h : 0;
+                totalCostPrice += (_g = ua.costPrice) !== null && _g !== void 0 ? _g : 0;
+                totalCloseValue += (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0;
+                totalLossGain += (_j = ua.lossGain) !== null && _j !== void 0 ? _j : 0;
                 const cls = determineAssetClass(ua.asset);
                 const entry = classMap.get(cls);
                 entry.holdings += 1;
-                entry.totalCashValue += (_j = ua.closeValue) !== null && _j !== void 0 ? _j : 0;
+                entry.totalCashValue += (_k = ua.closeValue) !== null && _k !== void 0 ? _k : 0;
             }
             const assetBreakdown = Array.from(classMap.entries()).map(([assetClass, data]) => ({
                 assetClass,
@@ -133,17 +134,17 @@ function generatePortfolioReport(userPortfolioId_1) {
                 cashAtBank: sub.cashAtBank,
             }));
             const assetSnapshots = userPortfolio.userAssets.map((ua) => {
-                var _a, _b, _c, _d, _e, _f, _g, _h;
+                var _a, _b, _c, _e, _f, _g, _h, _j;
                 return ({
                     assetId: ua.assetId,
                     symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : "",
                     description: (_b = ua.asset.description) !== null && _b !== void 0 ? _b : "",
                     stock: (_c = ua.stock) !== null && _c !== void 0 ? _c : 0,
-                    costPerShare: (_d = ua.costPerShare) !== null && _d !== void 0 ? _d : 0,
-                    costPrice: (_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0,
-                    closePrice: (_f = ua.asset.closePrice) !== null && _f !== void 0 ? _f : 0,
-                    closeValue: (_g = ua.closeValue) !== null && _g !== void 0 ? _g : 0,
-                    lossGain: (_h = ua.lossGain) !== null && _h !== void 0 ? _h : 0,
+                    costPerShare: (_e = ua.costPerShare) !== null && _e !== void 0 ? _e : 0,
+                    costPrice: (_f = ua.costPrice) !== null && _f !== void 0 ? _f : 0,
+                    closePrice: (_g = ua.asset.closePrice) !== null && _g !== void 0 ? _g : 0,
+                    closeValue: (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0,
+                    lossGain: (_j = ua.lossGain) !== null && _j !== void 0 ? _j : 0,
                 });
             });
             return {
@@ -246,8 +247,8 @@ function generateDailyReportsForAllPortfolios() {
         });
         let success = 0, failed = 0;
         const errors = [];
-        const reportDate = new Date();
-        reportDate.setUTCHours(0, 0, 0, 0);
+        const _rNow = new Date();
+        const reportDate = new Date(Date.UTC(_rNow.getFullYear(), _rNow.getMonth(), _rNow.getDate()));
         for (const portfolio of allPortfolios) {
             try {
                 const existing = yield db_1.db.userPortfolioPerformanceReport.findFirst({
@@ -282,6 +283,54 @@ function generateDailyReportsForAllPortfolios() {
         return { success, failed, total: allPortfolios.length, errors };
     });
 }
+function generateAllPortfoliosForDate(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { reportDate: reportDateStr } = req.body;
+            if (!reportDateStr) {
+                return res.status(400).json({ data: null, error: "reportDate is required" });
+            }
+            const d = new Date(reportDateStr);
+            const reportDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+            const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+            const allPortfolios = yield db_1.db.userPortfolio.findMany({
+                where: { isActive: true },
+                select: { id: true },
+            });
+            let success = 0, failed = 0;
+            const errors = [];
+            for (const portfolio of allPortfolios) {
+                try {
+                    yield db_1.db.userPortfolioPerformanceReport.deleteMany({
+                        where: {
+                            userPortfolioId: portfolio.id,
+                            reportDate: { gte: reportDate, lt: nextDay },
+                        },
+                    });
+                    const reportId = yield generateAndSaveReport(portfolio.id, reportDate);
+                    if (reportId)
+                        success++;
+                    else {
+                        failed++;
+                        errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
+                    }
+                }
+                catch (err) {
+                    failed++;
+                    errors.push(`Portfolio ${portfolio.id}: ${err.message}`);
+                }
+            }
+            return res.status(200).json({
+                data: { total: allPortfolios.length, success, failed, errors },
+                error: null,
+            });
+        }
+        catch (error) {
+            console.error("generateAllPortfoliosForDate error:", error);
+            return res.status(500).json({ data: null, error: "Failed to generate reports for date" });
+        }
+    });
+}
 const REPORT_INCLUDE = {
     assetBreakdown: { orderBy: { assetClass: "asc" } },
     subPortfolioSnapshots: { orderBy: { generation: "asc" } },
@@ -300,8 +349,10 @@ function generatePerformanceReport(req, res) {
             });
             if (!portfolio)
                 return res.status(404).json({ data: null, error: "Portfolio not found" });
-            const date = reportDate ? new Date(reportDate) : new Date();
-            date.setUTCHours(0, 0, 0, 0);
+            const _d = reportDate ? new Date(reportDate) : new Date();
+            const date = reportDate
+                ? new Date(Date.UTC(_d.getUTCFullYear(), _d.getUTCMonth(), _d.getUTCDate()))
+                : new Date(Date.UTC(_d.getFullYear(), _d.getMonth(), _d.getDate()));
             const reportId = yield generateAndSaveReport(userPortfolioId, date);
             if (!reportId) {
                 return res.status(500).json({ data: null, error: "Failed to generate report" });
@@ -544,8 +595,8 @@ function generateDailyReportsForUser(userId) {
             select: { id: true, customName: true },
             orderBy: { createdAt: "asc" },
         });
-        const reportDate = new Date();
-        reportDate.setUTCHours(0, 0, 0, 0);
+        const _rNow2 = new Date();
+        const reportDate = new Date(Date.UTC(_rNow2.getFullYear(), _rNow2.getMonth(), _rNow2.getDate()));
         let success = 0, skipped = 0, failed = 0;
         const errors = [];
         for (const up of portfolios) {
@@ -624,20 +675,20 @@ function backfillAssetSnapshots(req, res) {
                         : 1;
                     yield db_1.db.userPortfolioAssetSnapshot.createMany({
                         data: assets.map((a) => {
-                            var _a, _b, _c, _d, _e, _f, _g, _h;
+                            var _a, _b, _c, _e, _f, _g, _h, _j;
                             const scaledCloseValue = ((_a = a.closeValue) !== null && _a !== void 0 ? _a : 0) * scale;
                             const scaledCostPrice = ((_b = a.costPrice) !== null && _b !== void 0 ? _b : 0) * scale;
                             const scaledLossGain = scaledCloseValue - scaledCostPrice;
                             const derivedClosePrice = ((_c = a.stock) !== null && _c !== void 0 ? _c : 0) > 0
-                                ? scaledCloseValue / ((_d = a.stock) !== null && _d !== void 0 ? _d : 1)
+                                ? scaledCloseValue / ((_e = a.stock) !== null && _e !== void 0 ? _e : 1)
                                 : 0;
                             return {
                                 reportId: report.id,
                                 assetId: a.assetId,
-                                symbol: (_e = a.asset.symbol) !== null && _e !== void 0 ? _e : "",
-                                description: (_f = a.asset.description) !== null && _f !== void 0 ? _f : "",
-                                stock: (_g = a.stock) !== null && _g !== void 0 ? _g : 0,
-                                costPerShare: (_h = a.costPerShare) !== null && _h !== void 0 ? _h : 0,
+                                symbol: (_f = a.asset.symbol) !== null && _f !== void 0 ? _f : "",
+                                description: (_g = a.asset.description) !== null && _g !== void 0 ? _g : "",
+                                stock: (_h = a.stock) !== null && _h !== void 0 ? _h : 0,
+                                costPerShare: (_j = a.costPerShare) !== null && _j !== void 0 ? _j : 0,
                                 costPrice: scaledCostPrice,
                                 closePrice: derivedClosePrice,
                                 closeValue: scaledCloseValue,

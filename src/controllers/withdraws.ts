@@ -629,11 +629,12 @@ export async function approveWithdrawal(req: Request, res: Response) {
       });
 
       // ── 5. Master wallet: receive the redeemed cash, sync NAV ──────────────
+      // totalWithdrawn tracks only hard withdrawals (cash leaving the platform).
+      // Redemptions are internal portfolio→master transfers, not external cash-outs.
       await tx.masterWallet.updateMany({
         where: { userId: existing.userId },
         data: {
-          balance:        { increment: redemptionAmount },
-          totalWithdrawn: { increment: redemptionAmount },
+          balance: { increment: redemptionAmount },
         },
       });
       await syncMasterWalletNav(tx, existing.userId);

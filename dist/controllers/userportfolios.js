@@ -123,12 +123,11 @@ function recomputeUPAsFor(userPortfolioId_1) {
             totalPortfolioValue += closeValue;
             totalCostPrice += costPrice;
         }
-        const totalInvested = nav + toNumber(up.wallet.totalFees, 0);
+        const totalInvested = toNumber(up.totalInvested, 0);
         yield client.userPortfolio.update({
             where: { id: up.id },
             data: {
                 portfolioValue: totalPortfolioValue,
-                totalInvested,
                 totalLossGain: totalPortfolioValue - totalInvested,
             },
         });
@@ -389,7 +388,7 @@ function updateUserPortfolio(req, res) {
             if (!current)
                 return res.status(404).json({ data: null, error: "UserPortfolio not found." });
             const updated = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
-                var _a, _b, _c;
+                var _a, _b;
                 if ((customName === null || customName === void 0 ? void 0 : customName.trim()) && customName.trim() !== current.customName) {
                     const conflict = yield tx.userPortfolio.findFirst({
                         where: { userId: current.userId, portfolioId: current.portfolioId, customName: customName.trim(), NOT: { id } },
@@ -427,11 +426,10 @@ function updateUserPortfolio(req, res) {
                     });
                     const totalClose = allAssets.reduce((s, a) => s + toNumber(a.closeValue, 0), 0);
                     const totalCost = allAssets.reduce((s, a) => s + toNumber(a.costPrice, 0), 0);
-                    const walletTotalFees = toNumber((_b = current.wallet) === null || _b === void 0 ? void 0 : _b.totalFees, 0);
-                    const totalInvested = totalCost + walletTotalFees;
+                    const totalInvested = toNumber(current.totalInvested, 0);
                     yield tx.userPortfolio.update({
                         where: { id },
-                        data: { portfolioValue: totalClose, totalInvested, totalLossGain: totalClose - totalInvested },
+                        data: { portfolioValue: totalClose, totalLossGain: totalClose - totalInvested },
                     });
                 }
                 if (recompute) {
@@ -440,7 +438,7 @@ function updateUserPortfolio(req, res) {
                 yield syncMasterWallet(tx, current.userId);
                 return tx.userPortfolio.findUnique({
                     where: { id },
-                    include: (_c = parseInclude(req.query)) !== null && _c !== void 0 ? _c : DEFAULT_INCLUDE,
+                    include: (_b = parseInclude(req.query)) !== null && _b !== void 0 ? _b : DEFAULT_INCLUDE,
                 });
             }));
             return res.status(200).json({ data: updated, error: null });
