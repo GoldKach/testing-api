@@ -26,6 +26,18 @@ interface SubPortfolioSnapshot {
   cashAtBank:      number;
 }
 
+interface AssetSnapshotRecord {
+  assetId:      string;
+  symbol:       string;
+  description:  string;
+  stock:        number;
+  costPerShare: number;
+  costPrice:    number;
+  closePrice:   number;
+  closeValue:   number;
+  lossGain:     number;
+}
+
 interface GeneratedReport {
   userPortfolioId:      string;
   reportDate:           Date;
@@ -37,6 +49,7 @@ interface GeneratedReport {
   netAssetValue:        number;
   assetBreakdown:       AssetBreakdown[];
   subPortfolioSnapshots: SubPortfolioSnapshot[];
+  assetSnapshots:       AssetSnapshotRecord[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,19 +119,51 @@ async function generatePortfolioReport(
       return {
         userPortfolioId,
         reportDate,
-        totalCostPrice:       0,
-        totalCloseValue:      0,
-        totalLossGain:        0,
-        totalPercentage:      0,
+        totalCostPrice:        0,
+        totalCloseValue:       0,
+        totalLossGain:         0,
+        totalPercentage:       0,
         totalFees,
-        netAssetValue:        walletBalance - totalFees,
-        assetBreakdown:       [],
+        netAssetValue:         walletBalance - totalFees,
+        assetBreakdown:        [],
         subPortfolioSnapshots: [],
+        assetSnapshots:        [],
       };
     }
 
-    // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
-    // These already reflect the weighted-average across all top-up slices
+    // ── Resolve historical close prices for the report date ──────────
+    // For past dates we look up AssetPriceHistory to get the price that was
+    // valid on that day, not whatever the live price happens to be right now.
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const reportDateUTC = new Date(reportDate);
+    reportDateUTC.setUTCHours(0, 0, 0, 0);
+    const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+
+    // assetId → close price valid on reportDate (or most recent price before it)
+    const historicalPriceMap = new Map<string, number>();
+
+    if (!isToday) {
+      const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+      if (assetIds.length > 0) {
+        // Fetch all history rows on or before the report date, ordered newest first.
+        // We take the first (most recent) row per asset to find the price valid on that date.
+        const historyRows = await db.assetPriceHistory.findMany({
+          where: {
+            assetId:   { in: assetIds },
+            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+          },
+          orderBy: { priceDate: "desc" },
+        });
+        for (const row of historyRows) {
+          if (!historicalPriceMap.has(row.assetId)) {
+            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+          }
+        }
+      }
+    }
+
+    // ── Compute totals ───────────────────────────────────────────────
     let totalCostPrice  = 0;
     let totalCloseValue = 0;
     let totalLossGain   = 0;
@@ -127,15 +172,44 @@ async function generatePortfolioReport(
     const classMap = new Map<AssetClass, { holdings: number; totalCashValue: number }>();
     ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
 
+    const assetSnapshots: AssetSnapshotRecord[] = [];
+
     for (const ua of userPortfolio.userAssets) {
-      totalCostPrice  += ua.costPrice  ?? 0;
-      totalCloseValue += ua.closeValue ?? 0;
-      totalLossGain   += ua.lossGain   ?? 0;
+      const costPrice  = Number(ua.costPrice ?? 0);
+      const stock      = Number(ua.stock     ?? 0);
+
+      // For past-date reports: use the historical price for that date.
+      // For today: use the pre-computed closeValue already in the DB (live).
+      const historicalPrice = historicalPriceMap.get(ua.assetId);
+      const closePrice = isToday || historicalPrice === undefined
+        ? Number(ua.asset.closePrice ?? 0)
+        : historicalPrice;
+      const closeValue = isToday || historicalPrice === undefined
+        ? Number(ua.closeValue ?? 0)
+        : closePrice * stock;
+      const lossGain = closeValue - costPrice;
+
+      totalCostPrice  += costPrice;
+      totalCloseValue += closeValue;
+      totalLossGain   += lossGain;
 
       const cls   = determineAssetClass(ua.asset);
       const entry = classMap.get(cls)!;
       entry.holdings       += 1;
-      entry.totalCashValue += ua.closeValue ?? 0;
+      entry.totalCashValue += closeValue;
+
+      // Capture per-asset values at this moment — locks in the price for this report date.
+      assetSnapshots.push({
+        assetId:      ua.assetId,
+        symbol:       ua.asset.symbol      ?? "",
+        description:  ua.asset.description ?? "",
+        stock,
+        costPerShare: Number(ua.costPerShare ?? 0),
+        costPrice,
+        closePrice,
+        closeValue,
+        lossGain,
+      });
     }
 
     const assetBreakdown: AssetBreakdown[] = Array.from(classMap.entries()).map(
@@ -176,6 +250,7 @@ async function generatePortfolioReport(
       netAssetValue,
       assetBreakdown,
       subPortfolioSnapshots,
+      assetSnapshots,
     };
   } catch (error) {
     console.error("Error generating portfolio report:", error);
@@ -214,6 +289,21 @@ async function savePortfolioReport(report: GeneratedReport): Promise<string | nu
             totalLossGain:   s.totalLossGain,
             totalFees:       s.totalFees,
             cashAtBank:      s.cashAtBank,
+          })),
+        },
+        // Per-asset close price snapshot — locks in the price that was valid on the report date.
+        // The frontend always prefers these over live userAssets prices when displaying historical reports.
+        assetSnapshots: {
+          create: report.assetSnapshots.map((s) => ({
+            assetId:      s.assetId,
+            symbol:       s.symbol,
+            description:  s.description,
+            stock:        s.stock,
+            costPerShare: s.costPerShare,
+            costPrice:    s.costPrice,
+            closePrice:   s.closePrice,
+            closeValue:   s.closeValue,
+            lossGain:     s.lossGain,
           })),
         },
       },
@@ -311,6 +401,7 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
 const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
   assetBreakdown:        { orderBy: { assetClass: "asc" } },
   subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+  assetSnapshots:        true,
 };
 
 /* ------------------------------------------------------------------ */
@@ -618,6 +709,61 @@ export async function getPerformanceStatistics(req: Request, res: Response) {
   } catch (error) {
     console.error("getPerformanceStatistics error:", error);
     return res.status(500).json({ data: null, error: "Failed to calculate statistics" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/regenerate                      */
+/*  Force-regenerate: deletes the existing report for the date then    */
+/*  builds a fresh one using AssetPriceHistory prices for that day.    */
+/* ------------------------------------------------------------------ */
+export async function regeneratePerformanceReport(req: Request, res: Response) {
+  try {
+    const { userPortfolioId, reportDate } = req.body as {
+      userPortfolioId?: string;
+      reportDate?: string;
+    };
+
+    if (!userPortfolioId) {
+      return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+    }
+
+    const portfolio = await db.userPortfolio.findUnique({
+      where:  { id: userPortfolioId },
+      select: { id: true, customName: true },
+    });
+    if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
+
+    const date = reportDate ? new Date(reportDate) : new Date();
+    date.setHours(0, 0, 0, 0);
+    const nextDay = new Date(date.getTime() + 24 * 60 * 60 * 1000);
+
+    // Delete any existing report(s) for this portfolio + date
+    const deleted = await db.userPortfolioPerformanceReport.deleteMany({
+      where: {
+        userPortfolioId,
+        reportDate: { gte: date, lt: nextDay },
+      },
+    });
+
+    const reportId = await generateAndSaveReport(userPortfolioId, date);
+    if (!reportId) {
+      return res.status(500).json({ data: null, error: "Failed to regenerate report" });
+    }
+
+    const report = await db.userPortfolioPerformanceReport.findUnique({
+      where:   { id: reportId },
+      include: REPORT_INCLUDE,
+    });
+
+    return res.status(201).json({
+      data:    report,
+      message: `Report regenerated${deleted.count > 0 ? ` (replaced ${deleted.count} existing)` : ""}`,
+      error:   null,
+    });
+  } catch (error) {
+    console.error("regeneratePerformanceReport error:", error);
+    return res.status(500).json({ data: null, error: "Failed to regenerate report" });
   }
 }
 

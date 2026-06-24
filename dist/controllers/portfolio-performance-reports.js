@@ -85,6 +85,29 @@ function generatePortfolioReport(userPortfolioId_1) {
                     assetSnapshots: [],
                 };
             }
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const reportDateUTC = new Date(reportDate);
+            reportDateUTC.setUTCHours(0, 0, 0, 0);
+            const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+            const historicalPriceMap = new Map();
+            if (!isToday) {
+                const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+                if (assetIds.length > 0) {
+                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                        where: {
+                            assetId: { in: assetIds },
+                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+                        },
+                        orderBy: { priceDate: "desc" },
+                    });
+                    for (const row of historyRows) {
+                        if (!historicalPriceMap.has(row.assetId)) {
+                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                        }
+                    }
+                }
+            }
             let totalCostPrice = 0;
             let totalCloseValue = 0;
             let totalLossGain = 0;
@@ -92,13 +115,23 @@ function generatePortfolioReport(userPortfolioId_1) {
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
             for (const ua of userPortfolio.userAssets) {
-                totalCostPrice += (_g = ua.costPrice) !== null && _g !== void 0 ? _g : 0;
-                totalCloseValue += (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0;
-                totalLossGain += (_j = ua.lossGain) !== null && _j !== void 0 ? _j : 0;
+                const costPrice = Number((_g = ua.costPrice) !== null && _g !== void 0 ? _g : 0);
+                const stock = Number((_h = ua.stock) !== null && _h !== void 0 ? _h : 0);
+                const histPrice = historicalPriceMap.get(ua.assetId);
+                const closePrice = isToday || histPrice === undefined
+                    ? Number((_j = ua.asset.closePrice) !== null && _j !== void 0 ? _j : 0)
+                    : histPrice;
+                const closeValue = isToday || histPrice === undefined
+                    ? Number((_k = ua.closeValue) !== null && _k !== void 0 ? _k : 0)
+                    : closePrice * stock;
+                const lossGain = closeValue - costPrice;
+                totalCostPrice += costPrice;
+                totalCloseValue += closeValue;
+                totalLossGain += lossGain;
                 const cls = determineAssetClass(ua.asset);
                 const entry = classMap.get(cls);
                 entry.holdings += 1;
-                entry.totalCashValue += (_k = ua.closeValue) !== null && _k !== void 0 ? _k : 0;
+                entry.totalCashValue += closeValue;
             }
             const assetBreakdown = Array.from(classMap.entries()).map(([assetClass, data]) => ({
                 assetClass,
@@ -134,18 +167,27 @@ function generatePortfolioReport(userPortfolioId_1) {
                 cashAtBank: sub.cashAtBank,
             }));
             const assetSnapshots = userPortfolio.userAssets.map((ua) => {
-                var _a, _b, _c, _e, _f, _g, _h, _j;
-                return ({
+                var _a, _b, _c, _e, _f, _g, _h;
+                const stock = Number((_a = ua.stock) !== null && _a !== void 0 ? _a : 0);
+                const costPrice = Number((_b = ua.costPrice) !== null && _b !== void 0 ? _b : 0);
+                const histPrice = historicalPriceMap.get(ua.assetId);
+                const closePrice = isToday || histPrice === undefined
+                    ? Number((_c = ua.asset.closePrice) !== null && _c !== void 0 ? _c : 0)
+                    : histPrice;
+                const closeValue = isToday || histPrice === undefined
+                    ? Number((_e = ua.closeValue) !== null && _e !== void 0 ? _e : 0)
+                    : closePrice * stock;
+                return {
                     assetId: ua.assetId,
-                    symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : "",
-                    description: (_b = ua.asset.description) !== null && _b !== void 0 ? _b : "",
-                    stock: (_c = ua.stock) !== null && _c !== void 0 ? _c : 0,
-                    costPerShare: (_e = ua.costPerShare) !== null && _e !== void 0 ? _e : 0,
-                    costPrice: (_f = ua.costPrice) !== null && _f !== void 0 ? _f : 0,
-                    closePrice: (_g = ua.asset.closePrice) !== null && _g !== void 0 ? _g : 0,
-                    closeValue: (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0,
-                    lossGain: (_j = ua.lossGain) !== null && _j !== void 0 ? _j : 0,
-                });
+                    symbol: (_f = ua.asset.symbol) !== null && _f !== void 0 ? _f : "",
+                    description: (_g = ua.asset.description) !== null && _g !== void 0 ? _g : "",
+                    stock,
+                    costPerShare: Number((_h = ua.costPerShare) !== null && _h !== void 0 ? _h : 0),
+                    costPrice,
+                    closePrice,
+                    closeValue,
+                    lossGain: closeValue - costPrice,
+                };
             });
             return {
                 userPortfolioId,

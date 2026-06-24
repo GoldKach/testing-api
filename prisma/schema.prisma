@@ -508,9 +508,26 @@ model Asset {
   portfolioAssets     PortfolioAsset[]
   userPortfolioAssets UserPortfolioAsset[]
   subPortfolioAssets  SubPortfolioAsset[]
+  priceHistory        AssetPriceHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// One row per asset per trading date. Upserted every time closePrice is updated.
+// Used by the report generator to fetch the close price that was valid on a specific date
+// rather than whatever the live price happens to be when the report is run.
+model AssetPriceHistory {
+  id         String   @id @default(cuid())
+  assetId    String
+  asset      Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  priceDate  DateTime // midnight UTC of the trading date
+  closePrice Float    @default(0)
+
+  createdAt  DateTime @default(now())
+
+  @@unique([assetId, priceDate])
+  @@index([assetId, priceDate])
 }
 
 model Portfolio {

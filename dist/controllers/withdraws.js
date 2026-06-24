@@ -420,7 +420,6 @@ function approveWithdrawal(req, res) {
                     const snapLossGain = snapCloseValue - allocAmount;
                     const newStock = Math.max(0, Number(ua.stock) - stocksSold);
                     const newCostPrice = (ua.allocationPercentage / 100) * newTotalInvested;
-                    const newCostPerShare = newStock > 0 ? newCostPrice / newStock : 0;
                     const newCloseValue = Number(ua.asset.closePrice) * newStock;
                     const newLossGain = newCloseValue - newCostPrice;
                     return {
@@ -437,7 +436,7 @@ function approveWithdrawal(req, res) {
                         x2: {
                             stock: newStock,
                             costPrice: newCostPrice,
-                            costPerShare: newCostPerShare,
+                            costPerShare: Number(ua.costPerShare),
                             closeValue: newCloseValue,
                             lossGain: newLossGain,
                         },

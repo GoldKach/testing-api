@@ -9,8 +9,30 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.recordAssetPriceHistory = recordAssetPriceHistory;
 exports.cascadeClosePriceUpdates = cascadeClosePriceUpdates;
 const db_1 = require("../db/db");
+function recordAssetPriceHistory(updates, priceDate) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (updates.length === 0)
+            return;
+        const date = new Date(priceDate !== null && priceDate !== void 0 ? priceDate : new Date());
+        date.setUTCHours(0, 0, 0, 0);
+        for (const u of updates) {
+            try {
+                yield db_1.db.assetPriceHistory.upsert({
+                    where: { assetId_priceDate: { assetId: u.assetId, priceDate: date } },
+                    update: { closePrice: u.closePrice },
+                    create: { assetId: u.assetId, priceDate: date, closePrice: u.closePrice },
+                });
+            }
+            catch (err) {
+                console.error(`[recordAssetPriceHistory] assetId=${u.assetId}`, err);
+            }
+        }
+        console.log(`[recordAssetPriceHistory] recorded ${updates.length} price(s) for ${date.toISOString().slice(0, 10)}`);
+    });
+}
 function cascadeClosePriceUpdates(updates) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c;

@@ -20,10 +20,14 @@ exports.schedule5MinutePortfolioReports = schedule5MinutePortfolioReports;
 exports.schedule10MinutePortfolioReports = schedule10MinutePortfolioReports;
 exports.schedule30SecondPortfolioReports = schedule30SecondPortfolioReports;
 exports.scheduleDailyPortfolioReports = scheduleDailyPortfolioReports;
+exports.scheduleEATMidnightPriceSnapshot = scheduleEATMidnightPriceSnapshot;
 exports.startPortfolioReportCronFromEnv = startPortfolioReportCronFromEnv;
 const node_cron_1 = __importDefault(require("node-cron"));
 const portfolio_performance_reports_1 = require("../controllers/portfolio-performance-reports");
 const portfolio_performance_reports_2 = require("../controllers/portfolio-performance-reports");
+const db_1 = require("../db/db");
+const cascade_1 = require("../utils/cascade");
+const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
 function executePortfolioReportJob(label) {
     return __awaiter(this, void 0, void 0, function* () {
         const now = new Date().toISOString();
@@ -126,10 +130,45 @@ function schedule30SecondPortfolioReports() {
 function scheduleDailyPortfolioReports() {
     console.log("============================================================");
     console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-    console.log("⏰ Reports every day at 1:00 AM");
+    console.log("⏰ Reports every day at 12:00 EAT (09:00 UTC)");
     console.log("============================================================");
-    node_cron_1.default.schedule("0 1 * * *", () => __awaiter(this, void 0, void 0, function* () {
+    node_cron_1.default.schedule("0 9 * * *", () => __awaiter(this, void 0, void 0, function* () {
         yield executePortfolioReportJob("DAILY");
+    }));
+}
+function scheduleEATMidnightPriceSnapshot() {
+    console.log("============================================================");
+    console.log("📸 EAT MIDNIGHT PRICE SNAPSHOT SCHEDULER INITIALIZED");
+    console.log("⏰ Snapshot every day at 00:00 EAT (21:00 UTC)");
+    console.log("============================================================");
+    node_cron_1.default.schedule("0 21 * * *", () => __awaiter(this, void 0, void 0, function* () {
+        const startedAt = new Date().toISOString();
+        console.log("============================================================");
+        console.log(`📸 ASSET PRICE SNAPSHOT — midnight EAT`);
+        console.log(`   Started: ${startedAt}`);
+        console.log("============================================================");
+        try {
+            const nowUTC = new Date();
+            const nowEAT = new Date(nowUTC.getTime() + EAT_OFFSET_MS);
+            const eatDateUTC = new Date(Date.UTC(nowEAT.getUTCFullYear(), nowEAT.getUTCMonth(), nowEAT.getUTCDate()));
+            const assets = yield db_1.db.asset.findMany({
+                select: { id: true, symbol: true, closePrice: true },
+            });
+            const prices = assets
+                .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+                .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+            if (prices.length === 0) {
+                console.log("   No assets with close prices found — skipping snapshot.");
+                return;
+            }
+            yield (0, cascade_1.recordAssetPriceHistory)(prices, eatDateUTC);
+            console.log(`   ✅ Snapshotted ${prices.length} asset prices for EAT date ${eatDateUTC.toISOString().slice(0, 10)}`);
+            console.log("============================================================");
+        }
+        catch (err) {
+            console.error("❌ Price snapshot FAILED:", err);
+            console.log("============================================================");
+        }
     }));
 }
 function startPortfolioReportCronFromEnv() {

@@ -18,6 +18,7 @@ exports.getLatestPerformanceReport = getLatestPerformanceReport;
 exports.listPerformanceReports = listPerformanceReports;
 exports.getPerformanceReportById = getPerformanceReportById;
 exports.getPerformanceStatistics = getPerformanceStatistics;
+exports.regeneratePerformanceReport = regeneratePerformanceReport;
 exports.cleanupPerformanceReports = cleanupPerformanceReports;
 const db_1 = require("../db/db");
 function determineAssetClass(asset) {
@@ -41,7 +42,7 @@ function determineAssetClass(asset) {
 }
 function generatePortfolioReport(userPortfolioId_1) {
     return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date()) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
         try {
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
@@ -73,7 +74,31 @@ function generatePortfolioReport(userPortfolioId_1) {
                     netAssetValue: walletBalance - totalFees,
                     assetBreakdown: [],
                     subPortfolioSnapshots: [],
+                    assetSnapshots: [],
                 };
+            }
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const reportDateUTC = new Date(reportDate);
+            reportDateUTC.setUTCHours(0, 0, 0, 0);
+            const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+            const historicalPriceMap = new Map();
+            if (!isToday) {
+                const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+                if (assetIds.length > 0) {
+                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                        where: {
+                            assetId: { in: assetIds },
+                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+                        },
+                        orderBy: { priceDate: "desc" },
+                    });
+                    for (const row of historyRows) {
+                        if (!historicalPriceMap.has(row.assetId)) {
+                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                        }
+                    }
+                }
             }
             let totalCostPrice = 0;
             let totalCloseValue = 0;
@@ -81,14 +106,36 @@ function generatePortfolioReport(userPortfolioId_1) {
             const ALL_CLASSES = ["EQUITIES", "ETFS", "REITS", "BONDS", "CASH", "OTHERS"];
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
+            const assetSnapshots = [];
             for (const ua of userPortfolio.userAssets) {
-                totalCostPrice += (_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0;
-                totalCloseValue += (_f = ua.closeValue) !== null && _f !== void 0 ? _f : 0;
-                totalLossGain += (_g = ua.lossGain) !== null && _g !== void 0 ? _g : 0;
+                const costPrice = Number((_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0);
+                const stock = Number((_f = ua.stock) !== null && _f !== void 0 ? _f : 0);
+                const historicalPrice = historicalPriceMap.get(ua.assetId);
+                const closePrice = isToday || historicalPrice === undefined
+                    ? Number((_g = ua.asset.closePrice) !== null && _g !== void 0 ? _g : 0)
+                    : historicalPrice;
+                const closeValue = isToday || historicalPrice === undefined
+                    ? Number((_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0)
+                    : closePrice * stock;
+                const lossGain = closeValue - costPrice;
+                totalCostPrice += costPrice;
+                totalCloseValue += closeValue;
+                totalLossGain += lossGain;
                 const cls = determineAssetClass(ua.asset);
                 const entry = classMap.get(cls);
                 entry.holdings += 1;
-                entry.totalCashValue += (_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0;
+                entry.totalCashValue += closeValue;
+                assetSnapshots.push({
+                    assetId: ua.assetId,
+                    symbol: (_j = ua.asset.symbol) !== null && _j !== void 0 ? _j : "",
+                    description: (_k = ua.asset.description) !== null && _k !== void 0 ? _k : "",
+                    stock,
+                    costPerShare: Number((_l = ua.costPerShare) !== null && _l !== void 0 ? _l : 0),
+                    costPrice,
+                    closePrice,
+                    closeValue,
+                    lossGain,
+                });
             }
             const assetBreakdown = Array.from(classMap.entries()).map(([assetClass, data]) => ({
                 assetClass,
@@ -120,6 +167,7 @@ function generatePortfolioReport(userPortfolioId_1) {
                 netAssetValue,
                 assetBreakdown,
                 subPortfolioSnapshots,
+                assetSnapshots,
             };
         }
         catch (error) {
@@ -160,6 +208,19 @@ function savePortfolioReport(report) {
                             totalLossGain: s.totalLossGain,
                             totalFees: s.totalFees,
                             cashAtBank: s.cashAtBank,
+                        })),
+                    },
+                    assetSnapshots: {
+                        create: report.assetSnapshots.map((s) => ({
+                            assetId: s.assetId,
+                            symbol: s.symbol,
+                            description: s.description,
+                            stock: s.stock,
+                            costPerShare: s.costPerShare,
+                            costPrice: s.costPrice,
+                            closePrice: s.closePrice,
+                            closeValue: s.closeValue,
+                            lossGain: s.lossGain,
                         })),
                     },
                 },
@@ -243,6 +304,7 @@ function generateDailyReportsForAllPortfolios() {
 const REPORT_INCLUDE = {
     assetBreakdown: { orderBy: { assetClass: "asc" } },
     subPortfolioSnapshots: { orderBy: { generation: "asc" } },
+    assetSnapshots: true,
 };
 function generatePerformanceReport(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -500,6 +562,48 @@ function getPerformanceStatistics(req, res) {
         catch (error) {
             console.error("getPerformanceStatistics error:", error);
             return res.status(500).json({ data: null, error: "Failed to calculate statistics" });
+        }
+    });
+}
+function regeneratePerformanceReport(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { userPortfolioId, reportDate } = req.body;
+            if (!userPortfolioId) {
+                return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+            }
+            const portfolio = yield db_1.db.userPortfolio.findUnique({
+                where: { id: userPortfolioId },
+                select: { id: true, customName: true },
+            });
+            if (!portfolio)
+                return res.status(404).json({ data: null, error: "Portfolio not found" });
+            const date = reportDate ? new Date(reportDate) : new Date();
+            date.setHours(0, 0, 0, 0);
+            const nextDay = new Date(date.getTime() + 24 * 60 * 60 * 1000);
+            const deleted = yield db_1.db.userPortfolioPerformanceReport.deleteMany({
+                where: {
+                    userPortfolioId,
+                    reportDate: { gte: date, lt: nextDay },
+                },
+            });
+            const reportId = yield generateAndSaveReport(userPortfolioId, date);
+            if (!reportId) {
+                return res.status(500).json({ data: null, error: "Failed to regenerate report" });
+            }
+            const report = yield db_1.db.userPortfolioPerformanceReport.findUnique({
+                where: { id: reportId },
+                include: REPORT_INCLUDE,
+            });
+            return res.status(201).json({
+                data: report,
+                message: `Report regenerated${deleted.count > 0 ? ` (replaced ${deleted.count} existing)` : ""}`,
+                error: null,
+            });
+        }
+        catch (error) {
+            console.error("regeneratePerformanceReport error:", error);
+            return res.status(500).json({ data: null, error: "Failed to regenerate report" });
         }
     });
 }

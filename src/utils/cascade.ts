@@ -2,6 +2,32 @@
 import { db } from "@/db/db";
 
 /**
+ * Upserts one AssetPriceHistory row per asset for the given trading date (defaults to today UTC).
+ * Called fire-and-forget alongside cascadeClosePriceUpdates so every price change is recorded.
+ */
+export async function recordAssetPriceHistory(
+  updates: Array<{ assetId: string; closePrice: number }>,
+  priceDate?: Date,
+): Promise<void> {
+  if (updates.length === 0) return;
+  const date = new Date(priceDate ?? new Date());
+  date.setUTCHours(0, 0, 0, 0); // normalize to midnight UTC
+
+  for (const u of updates) {
+    try {
+      await db.assetPriceHistory.upsert({
+        where:  { assetId_priceDate: { assetId: u.assetId, priceDate: date } },
+        update: { closePrice: u.closePrice },
+        create: { assetId: u.assetId, priceDate: date, closePrice: u.closePrice },
+      });
+    } catch (err) {
+      console.error(`[recordAssetPriceHistory] assetId=${u.assetId}`, err);
+    }
+  }
+  console.log(`[recordAssetPriceHistory] recorded ${updates.length} price(s) for ${date.toISOString().slice(0, 10)}`);
+}
+
+/**
  * Propagates close price changes across all client portfolios that hold the affected assets.
  * Designed to run as a background fire-and-forget after the HTTP response is sent.
  *

@@ -371,7 +371,7 @@ export async function updateWithdrawal(req: Request, res: Response) {
  *   New portfolio (X2 — remaining position):
  *     stock         = oldStock − stocksSold
  *     costPrice     = alloc% × (oldTotalInvested − redemptionAmount)
- *     costPerShare  = newCostPrice / newStock
+ *     costPerShare  = unchanged (original purchase price)
  *     closeValue    = asset.closePrice × newStock   ← system price, never the approval price
  *     lossGain      = closeValue − costPrice
  *
@@ -531,7 +531,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
         // ── X2 remaining portfolio — use SYSTEM close price, never the approval price ──
         const newStock      = Math.max(0, Number(ua.stock) - stocksSold);
         const newCostPrice  = (ua.allocationPercentage / 100) * newTotalInvested;
-        const newCostPerShare = newStock > 0 ? newCostPrice / newStock : 0;
+        // costPerShare stays unchanged on redemption — it reflects the original purchase price
         const newCloseValue = Number(ua.asset.closePrice) * newStock;
         const newLossGain   = newCloseValue - newCostPrice;
 
@@ -549,7 +549,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
           x2: {
             stock:        newStock,
             costPrice:    newCostPrice,
-            costPerShare: newCostPerShare,
+            costPerShare: Number(ua.costPerShare), // never changes on redemption
             closeValue:   newCloseValue,
             lossGain:     newLossGain,
           },

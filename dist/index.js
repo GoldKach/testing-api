@@ -43,6 +43,7 @@ const PORT = Number(process.env.PORT) || 8000;
 app.listen(PORT, "0.0.0.0", () => {
     var _a, _b;
     (0, portfolio_report_cron_1.startPortfolioReportCronFromEnv)();
+    (0, portfolio_report_cron_1.scheduleEATMidnightPriceSnapshot)();
     (0, logRetentionJob_1.startLogRetentionJob)();
     console.log(`Server is running on http://localhost:${PORT}`);
     auditService_1.auditService.logSystem({

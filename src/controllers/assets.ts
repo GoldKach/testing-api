@@ -4,7 +4,7 @@
 import { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/db/db";
-import { cascadeClosePriceUpdates } from "@/utils/cascade";
+import { cascadeClosePriceUpdates, recordAssetPriceHistory } from "@/utils/cascade";
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -336,10 +336,14 @@ export async function updateAsset(req: Request, res: Response) {
     // 2) Respond immediately — don't make the client wait for cascade
     res.status(200).json({ data: updated, error: null });
 
-    // 3) Run cascade in background AFTER response is sent
+    // 3) Run cascade + price history recording in background AFTER response is sent
     if (patch.closePrice !== undefined) {
-      cascadeClosePriceUpdates([{ assetId: id, closePrice: Number(patch.closePrice) }]).catch((err) =>
+      const priceUpdate = [{ assetId: id, closePrice: Number(patch.closePrice) }];
+      cascadeClosePriceUpdates(priceUpdate).catch((err) =>
         console.error(`[cascadeClosePriceUpdates] assetId=${id}`, err)
+      );
+      recordAssetPriceHistory(priceUpdate).catch((err) =>
+        console.error(`[recordAssetPriceHistory] assetId=${id}`, err)
       );
     }
   } catch (error: any) {
@@ -391,6 +395,112 @@ export async function deleteAsset(req: Request, res: Response) {
   }
 }
 
+/* ------------------------------ ASSET PRICE HISTORY ----------------------------- */
+
+/**
+ * GET /assets/price-history?date=YYYY-MM-DD
+ * Returns all assets with their close price on the requested date.
+ * Uses the most recent AssetPriceHistory row on or before the date,
+ * falling back to Asset.closePrice if no history exists for that asset yet.
+ */
+export async function getAssetPriceHistory(req: Request, res: Response) {
+  try {
+    const dateStr = req.query.date as string;
+    if (!dateStr) {
+      return res.status(400).json({ data: null, error: "date query param is required (YYYY-MM-DD)" });
+    }
+
+    const date = new Date(dateStr);
+    date.setUTCHours(0, 0, 0, 0);
+    if (isNaN(date.getTime())) {
+      return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
+    }
+
+    const [assets, historyRows] = await Promise.all([
+      db.asset.findMany({
+        orderBy: { symbol: "asc" },
+        select: { id: true, symbol: true, description: true, sector: true, assetClass: true, closePrice: true },
+      }),
+      db.assetPriceHistory.findMany({
+        where: { priceDate: { lte: new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1) } },
+        orderBy: { priceDate: "desc" },
+      }),
+    ]);
+
+    // Most-recent price per asset on or before the requested date
+    const historicalMap = new Map<string, { closePrice: number; priceDate: Date }>();
+    for (const row of historyRows) {
+      if (!historicalMap.has(row.assetId)) {
+        historicalMap.set(row.assetId, { closePrice: Number(row.closePrice), priceDate: row.priceDate });
+      }
+    }
+
+    const result = assets.map((asset) => {
+      const h = historicalMap.get(asset.id);
+      return {
+        id:              asset.id,
+        symbol:          asset.symbol,
+        description:     asset.description,
+        sector:          asset.sector,
+        assetClass:      asset.assetClass,
+        liveClosePrice:  Number(asset.closePrice),  // current live price
+        historicalPrice: h?.closePrice ?? Number(asset.closePrice),
+        priceDate:       h?.priceDate ?? null,
+        hasHistory:      !!h,
+      };
+    });
+
+    return res.status(200).json({ data: result, queryDate: date.toISOString(), error: null });
+  } catch (error) {
+    console.error("getAssetPriceHistory error:", error);
+    return res.status(500).json({ data: null, error: "Failed to fetch asset price history" });
+  }
+}
+
+/**
+ * POST /assets/price-history/batch
+ * Body: { date: "YYYY-MM-DD", prices: [{ assetId, closePrice }] }
+ * Upserts one AssetPriceHistory row per asset for the given date.
+ * Idempotent — safe to call multiple times for the same date.
+ */
+export async function batchUpsertAssetPriceHistory(req: Request, res: Response) {
+  try {
+    const { date: dateStr, prices } = req.body as {
+      date?: string;
+      prices?: Array<{ assetId: string; closePrice: number }>;
+    };
+
+    if (!dateStr) {
+      return res.status(400).json({ data: null, error: "date is required (YYYY-MM-DD)" });
+    }
+    if (!prices || !Array.isArray(prices) || prices.length === 0) {
+      return res.status(400).json({ data: null, error: "prices array is required" });
+    }
+
+    const date = new Date(dateStr);
+    date.setUTCHours(0, 0, 0, 0);
+    if (isNaN(date.getTime())) {
+      return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
+    }
+
+    const validated = prices.map((p) => ({
+      assetId:    p.assetId,
+      closePrice: Math.max(0, Number(p.closePrice) || 0),
+    }));
+
+    await recordAssetPriceHistory(validated, date);
+
+    return res.status(200).json({
+      data:    { count: validated.length, date: date.toISOString().slice(0, 10) },
+      message: `Saved ${validated.length} price(s) for ${dateStr}`,
+      error:   null,
+    });
+  } catch (error) {
+    console.error("batchUpsertAssetPriceHistory error:", error);
+    return res.status(500).json({ data: null, error: "Failed to save asset price history" });
+  }
+}
+
 /* ------------------------------ BATCH UPDATE CLOSE PRICES ----------------------------- */
 /**
  * POST /assets/batch-update-prices
@@ -433,6 +543,9 @@ export async function batchUpdateAssetPrices(req: Request, res: Response) {
 
     cascadeClosePriceUpdates(validUpdates).catch((err) =>
       console.error(`[cascadeClosePriceUpdates] batch (${validUpdates.length} assets)`, err)
+    );
+    recordAssetPriceHistory(validUpdates).catch((err) =>
+      console.error(`[recordAssetPriceHistory] batch (${validUpdates.length} assets)`, err)
     );
   } catch (error: any) {
     if (error?.code === "P2025") {

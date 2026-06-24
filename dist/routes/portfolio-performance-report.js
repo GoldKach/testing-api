@@ -10,6 +10,7 @@ portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/latest/:us
 portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/stats/:userPortfolioId", portfolio_performance_reports_1.getPerformanceStatistics);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate", portfolio_performance_reports_1.generatePerformanceReport);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate-for-user", portfolio_performance_report_1.generateUserPerformanceReports);
+portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/regenerate", portfolio_performance_report_1.regeneratePerformanceReport);
 portfolioPerformanceReportsRouter.post("/portfolio-performance-reports/generate-all", portfolio_performance_reports_1.generateAllPerformanceReports);
 portfolioPerformanceReportsRouter.delete("/portfolio-performance-reports/cleanup", portfolio_performance_reports_1.cleanupPerformanceReports);
 portfolioPerformanceReportsRouter.get("/portfolio-performance-reports/pdf/:userPortfolioId", portfolio_pdf_report_1.generatePortfolioPdfReport);

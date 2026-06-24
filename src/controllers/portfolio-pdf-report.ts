@@ -240,6 +240,8 @@ function drawPageFooter(doc: PDFKit.PDFDocument, pageNum: number) {
 export async function generatePortfolioPdfReport(req: Request, res: Response) {
   try {
     const { userPortfolioId } = req.params;
+    // Optional: ?reportDate=2026-05-26 to generate PDF for a specific past date
+    const reportDateParam = req.query.reportDate as string | undefined;
 
     /* ── 1. Fetch all required data ─────────────────────────────── */
     const userPortfolio = await db.userPortfolio.findUnique({
@@ -272,25 +274,80 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
 
     const { user, portfolio, wallet, userAssets } = userPortfolio;
 
+    // Determine the report date
+    const reportDate = reportDateParam ? new Date(reportDateParam) : new Date();
+    reportDate.setHours(0, 0, 0, 0);
+    const reportingPeriod = getQuarter(reportDate);
+
+    // Try to load stored asset snapshots for the requested date so we use the
+    // close prices that were valid on that day, not today's live prices.
+    const storedReport = await db.userPortfolioPerformanceReport.findFirst({
+      where: {
+        userPortfolioId,
+        reportDate: {
+          gte: reportDate,
+          lt:  new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
+        },
+      },
+      include: { assetSnapshots: true },
+      orderBy: { reportDate: "desc" },
+    });
+
+    // Build a lookup: assetId → snapshot (historical price on report date)
+    const snapshotMap = new Map<string, { closePrice: number; closeValue: number; lossGain: number }>();
+    if (storedReport?.assetSnapshots?.length) {
+      for (const s of storedReport.assetSnapshots) {
+        snapshotMap.set(s.assetId, {
+          closePrice: Number(s.closePrice),
+          closeValue: Number(s.closeValue),
+          lossGain:   Number(s.lossGain),
+        });
+      }
+    }
+
+    // Fallback: if no stored snapshots (old report or never generated), look up
+    // AssetPriceHistory directly for past-date PDFs so correct historical prices
+    // entered on the Price History admin page are always used.
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const reportDateUTC = new Date(reportDate);
+    reportDateUTC.setUTCHours(0, 0, 0, 0);
+    const isPastDate = reportDateUTC.getTime() < todayUTC.getTime();
+
+    const historicalPriceMap = new Map<string, number>(); // assetId → closePrice from AssetPriceHistory
+    if (isPastDate && snapshotMap.size === 0) {
+      const assetIds = userAssets.map((ua) => ua.assetId);
+      if (assetIds.length > 0) {
+        const historyRows = await db.assetPriceHistory.findMany({
+          where: {
+            assetId:   { in: assetIds },
+            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+          },
+          orderBy: { priceDate: "desc" },
+        });
+        for (const row of historyRows) {
+          if (!historicalPriceMap.has(row.assetId)) {
+            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+          }
+        }
+      }
+    }
+
     // Fetch first deposit fees (bankCost, transactionCost, cashAtBank)
-    // Try isFirstDeposit=true first, then fall back to earliest MASTER deposit with fees
     let firstDeposit = await db.deposit.findFirst({
       where: { userId: userPortfolio.userId, depositTarget: "MASTER", isFirstDeposit: true },
       select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
       orderBy: { createdAt: "asc" },
     });
     if (!firstDeposit || (firstDeposit.totalFees === 0)) {
-      // Fall back: find earliest MASTER deposit that has any fees
       firstDeposit = await db.deposit.findFirst({
         where: { userId: userPortfolio.userId, depositTarget: "MASTER", totalFees: { gt: 0 } },
         select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
         orderBy: { createdAt: "asc" },
       });
     }
-    const reportDate      = new Date();
-    const reportingPeriod = getQuarter(reportDate);
 
-    /* ── 2. Compute totals ──────────────────────────────────────── */
+    /* ── 2. Compute totals — use snapshot prices when available ─── */
     let totalCostPrice  = 0;
     let totalCloseValue = 0;
     let totalLossGain   = 0;
@@ -300,16 +357,29 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
     ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
 
     for (const ua of userAssets) {
-      const cost  = Number(ua.costPrice  ?? 0);
-      const close = Number(ua.closeValue ?? 0);
-      const gain  = Number(ua.lossGain   ?? 0);
+      const cost  = Number(ua.costPrice ?? 0);
+      const snap  = snapshotMap.get(ua.assetId);
+      // Priority: stored snapshot → AssetPriceHistory → live value
+      const histPrice = historicalPriceMap.get(ua.assetId);
+      const closePrice = snap
+        ? snap.closePrice
+        : histPrice !== undefined
+          ? histPrice
+          : Number(ua.asset.closePrice ?? 0);
+      const closeValue = snap
+        ? snap.closeValue
+        : histPrice !== undefined
+          ? histPrice * Number(ua.stock ?? 0)
+          : Number(ua.closeValue ?? 0);
+      const gain = closeValue - cost;
+
       totalCostPrice  += cost;
-      totalCloseValue += close;
+      totalCloseValue += closeValue;
       totalLossGain   += gain;
       const cls   = determineAssetClass(ua.asset);
       const entry = classMap.get(cls)!;
       entry.holdings       += 1;
-      entry.totalCashValue += close;
+      entry.totalCashValue += closeValue;
     }
 
     const returnPct = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
@@ -426,7 +496,20 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
 
     alt = false;
     for (const ua of userAssets) {
-      const gain = Number(ua.lossGain ?? 0);
+      // Priority: stored snapshot → AssetPriceHistory → live value
+      const snap      = snapshotMap.get(ua.assetId);
+      const histPrice = historicalPriceMap.get(ua.assetId);
+      const closePrice = snap
+        ? snap.closePrice
+        : histPrice !== undefined
+          ? histPrice
+          : Number(ua.asset.closePrice ?? 0);
+      const closeValue = snap
+        ? snap.closeValue
+        : histPrice !== undefined
+          ? histPrice * Number(ua.stock ?? 0)
+          : Number(ua.closeValue ?? 0);
+      const gain = closeValue - Number(ua.costPrice ?? 0);
       y = tableRow(
         doc, holdCols,
         [
@@ -436,8 +519,8 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
           `${Number(ua.allocationPercentage ?? 0).toFixed(0)}%`,
           fmt$(ua.costPerShare),
           fmt$(ua.costPrice),
-          fmt$(ua.asset.closePrice),
-          fmt$(ua.closeValue),
+          fmt$(closePrice),
+          fmt$(closeValue),
           fmt$(gain),
         ],
         y, 20, alt,

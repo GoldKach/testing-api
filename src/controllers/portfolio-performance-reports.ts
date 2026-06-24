@@ -679,8 +679,35 @@ async function generatePortfolioReport(
       };
     }
 
+    // ── Resolve historical close prices for past-date reports ─────────
+    // Check AssetPriceHistory so prices set on the admin Price History page
+    // are used when regenerating any past report.
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const reportDateUTC = new Date(reportDate);
+    reportDateUTC.setUTCHours(0, 0, 0, 0);
+    const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+
+    const historicalPriceMap = new Map<string, number>(); // assetId → historical closePrice
+    if (!isToday) {
+      const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+      if (assetIds.length > 0) {
+        const historyRows = await db.assetPriceHistory.findMany({
+          where: {
+            assetId:   { in: assetIds },
+            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+          },
+          orderBy: { priceDate: "desc" },
+        });
+        for (const row of historyRows) {
+          if (!historicalPriceMap.has(row.assetId)) {
+            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+          }
+        }
+      }
+    }
+
     // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
-    // These already reflect the weighted-average across all top-up slices
     let totalCostPrice  = 0;
     let totalCloseValue = 0;
     let totalLossGain   = 0;
@@ -690,14 +717,25 @@ async function generatePortfolioReport(
     ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
 
     for (const ua of userPortfolio.userAssets) {
-      totalCostPrice  += ua.costPrice  ?? 0;
-      totalCloseValue += ua.closeValue ?? 0;
-      totalLossGain   += ua.lossGain   ?? 0;
+      const costPrice  = Number(ua.costPrice ?? 0);
+      const stock      = Number(ua.stock     ?? 0);
+      const histPrice  = historicalPriceMap.get(ua.assetId);
+      const closePrice = isToday || histPrice === undefined
+        ? Number(ua.asset.closePrice ?? 0)
+        : histPrice;
+      const closeValue = isToday || histPrice === undefined
+        ? Number(ua.closeValue ?? 0)
+        : closePrice * stock;
+      const lossGain = closeValue - costPrice;
+
+      totalCostPrice  += costPrice;
+      totalCloseValue += closeValue;
+      totalLossGain   += lossGain;
 
       const cls   = determineAssetClass(ua.asset);
       const entry = classMap.get(cls)!;
       entry.holdings       += 1;
-      entry.totalCashValue += ua.closeValue ?? 0;
+      entry.totalCashValue += closeValue;
     }
 
     const assetBreakdown: AssetBreakdown[] = Array.from(classMap.entries()).map(
@@ -745,18 +783,29 @@ async function generatePortfolioReport(
       cashAtBank:      sub.cashAtBank,
     }));
 
-    // ── Per-asset snapshot: capture closePrice at this exact report date ──
-    const assetSnapshots: AssetSnapshot[] = userPortfolio.userAssets.map((ua) => ({
-      assetId:     ua.assetId,
-      symbol:      ua.asset.symbol      ?? "",
-      description: ua.asset.description ?? "",
-      stock:       ua.stock       ?? 0,
-      costPerShare: ua.costPerShare ?? 0,
-      costPrice:   ua.costPrice   ?? 0,
-      closePrice:  ua.asset.closePrice ?? 0,  // live closePrice at generation time
-      closeValue:  ua.closeValue  ?? 0,
-      lossGain:    ua.lossGain    ?? 0,
-    }));
+    // ── Per-asset snapshot: capture historical price at this report date ──
+    const assetSnapshots: AssetSnapshot[] = userPortfolio.userAssets.map((ua) => {
+      const stock      = Number(ua.stock     ?? 0);
+      const costPrice  = Number(ua.costPrice ?? 0);
+      const histPrice  = historicalPriceMap.get(ua.assetId);
+      const closePrice = isToday || histPrice === undefined
+        ? Number(ua.asset.closePrice ?? 0)
+        : histPrice;
+      const closeValue = isToday || histPrice === undefined
+        ? Number(ua.closeValue ?? 0)
+        : closePrice * stock;
+      return {
+        assetId:      ua.assetId,
+        symbol:       ua.asset.symbol      ?? "",
+        description:  ua.asset.description ?? "",
+        stock,
+        costPerShare: Number(ua.costPerShare ?? 0),
+        costPrice,
+        closePrice,
+        closeValue,
+        lossGain:     closeValue - costPrice,
+      };
+    });
 
     return {
       userPortfolioId,

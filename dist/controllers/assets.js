@@ -15,6 +15,8 @@ exports.getAssetBySymbol = getAssetBySymbol;
 exports.createAsset = createAsset;
 exports.updateAsset = updateAsset;
 exports.deleteAsset = deleteAsset;
+exports.getAssetPriceHistory = getAssetPriceHistory;
+exports.batchUpsertAssetPriceHistory = batchUpsertAssetPriceHistory;
 exports.batchUpdateAssetPrices = batchUpdateAssetPrices;
 const db_1 = require("../db/db");
 const cascade_1 = require("../utils/cascade");
@@ -206,7 +208,9 @@ function updateAsset(req, res) {
             const updated = yield db_1.db.asset.update({ where: { id }, data: patch });
             res.status(200).json({ data: updated, error: null });
             if (patch.closePrice !== undefined) {
-                (0, cascade_1.cascadeClosePriceUpdates)([{ assetId: id, closePrice: Number(patch.closePrice) }]).catch((err) => console.error(`[cascadeClosePriceUpdates] assetId=${id}`, err));
+                const priceUpdate = [{ assetId: id, closePrice: Number(patch.closePrice) }];
+                (0, cascade_1.cascadeClosePriceUpdates)(priceUpdate).catch((err) => console.error(`[cascadeClosePriceUpdates] assetId=${id}`, err));
+                (0, cascade_1.recordAssetPriceHistory)(priceUpdate).catch((err) => console.error(`[recordAssetPriceHistory] assetId=${id}`, err));
             }
         }
         catch (error) {
@@ -249,6 +253,89 @@ function deleteAsset(req, res) {
         }
     });
 }
+function getAssetPriceHistory(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const dateStr = req.query.date;
+            if (!dateStr) {
+                return res.status(400).json({ data: null, error: "date query param is required (YYYY-MM-DD)" });
+            }
+            const date = new Date(dateStr);
+            date.setUTCHours(0, 0, 0, 0);
+            if (isNaN(date.getTime())) {
+                return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
+            }
+            const [assets, historyRows] = yield Promise.all([
+                db_1.db.asset.findMany({
+                    orderBy: { symbol: "asc" },
+                    select: { id: true, symbol: true, description: true, sector: true, assetClass: true, closePrice: true },
+                }),
+                db_1.db.assetPriceHistory.findMany({
+                    where: { priceDate: { lte: new Date(date.getTime() + 24 * 60 * 60 * 1000 - 1) } },
+                    orderBy: { priceDate: "desc" },
+                }),
+            ]);
+            const historicalMap = new Map();
+            for (const row of historyRows) {
+                if (!historicalMap.has(row.assetId)) {
+                    historicalMap.set(row.assetId, { closePrice: Number(row.closePrice), priceDate: row.priceDate });
+                }
+            }
+            const result = assets.map((asset) => {
+                var _a, _b;
+                const h = historicalMap.get(asset.id);
+                return {
+                    id: asset.id,
+                    symbol: asset.symbol,
+                    description: asset.description,
+                    sector: asset.sector,
+                    assetClass: asset.assetClass,
+                    liveClosePrice: Number(asset.closePrice),
+                    historicalPrice: (_a = h === null || h === void 0 ? void 0 : h.closePrice) !== null && _a !== void 0 ? _a : Number(asset.closePrice),
+                    priceDate: (_b = h === null || h === void 0 ? void 0 : h.priceDate) !== null && _b !== void 0 ? _b : null,
+                    hasHistory: !!h,
+                };
+            });
+            return res.status(200).json({ data: result, queryDate: date.toISOString(), error: null });
+        }
+        catch (error) {
+            console.error("getAssetPriceHistory error:", error);
+            return res.status(500).json({ data: null, error: "Failed to fetch asset price history" });
+        }
+    });
+}
+function batchUpsertAssetPriceHistory(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { date: dateStr, prices } = req.body;
+            if (!dateStr) {
+                return res.status(400).json({ data: null, error: "date is required (YYYY-MM-DD)" });
+            }
+            if (!prices || !Array.isArray(prices) || prices.length === 0) {
+                return res.status(400).json({ data: null, error: "prices array is required" });
+            }
+            const date = new Date(dateStr);
+            date.setUTCHours(0, 0, 0, 0);
+            if (isNaN(date.getTime())) {
+                return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
+            }
+            const validated = prices.map((p) => ({
+                assetId: p.assetId,
+                closePrice: Math.max(0, Number(p.closePrice) || 0),
+            }));
+            yield (0, cascade_1.recordAssetPriceHistory)(validated, date);
+            return res.status(200).json({
+                data: { count: validated.length, date: date.toISOString().slice(0, 10) },
+                message: `Saved ${validated.length} price(s) for ${dateStr}`,
+                error: null,
+            });
+        }
+        catch (error) {
+            console.error("batchUpsertAssetPriceHistory error:", error);
+            return res.status(500).json({ data: null, error: "Failed to save asset price history" });
+        }
+    });
+}
 function batchUpdateAssetPrices(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -273,6 +360,7 @@ function batchUpdateAssetPrices(req, res) {
                 error: null,
             });
             (0, cascade_1.cascadeClosePriceUpdates)(validUpdates).catch((err) => console.error(`[cascadeClosePriceUpdates] batch (${validUpdates.length} assets)`, err));
+            (0, cascade_1.recordAssetPriceHistory)(validUpdates).catch((err) => console.error(`[recordAssetPriceHistory] batch (${validUpdates.length} assets)`, err));
         }
         catch (error) {
             if ((error === null || error === void 0 ? void 0 : error.code) === "P2025") {

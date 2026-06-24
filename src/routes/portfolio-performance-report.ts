@@ -9,7 +9,10 @@ import {
   getPerformanceStatistics,
   cleanupPerformanceReports,
 } from "@/controllers/portfolio-performance-reports";
-import { generateUserPerformanceReports } from "@/controllers/portfolio-performance-report";
+import {
+  generateUserPerformanceReports,
+  regeneratePerformanceReport,
+} from "@/controllers/portfolio-performance-report";
 import { generatePortfolioPdfReport } from "@/controllers/portfolio-pdf-report";
 
 const portfolioPerformanceReportsRouter = Router();
@@ -41,6 +44,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/generate-for-user",
   generateUserPerformanceReports
+);
+
+// Force-regenerate: delete existing report for portfolio + date, then create fresh
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/regenerate",
+  regeneratePerformanceReport
 );
 
 // Generate for all portfolios system-wide (cron)

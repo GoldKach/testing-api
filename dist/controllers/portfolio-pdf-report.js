@@ -189,9 +189,10 @@ function drawPageFooter(doc, pageNum) {
 }
 function generatePortfolioPdfReport(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
         try {
             const { userPortfolioId } = req.params;
+            const reportDateParam = req.query.reportDate;
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
                 include: {
@@ -219,6 +220,53 @@ function generatePortfolioPdfReport(req, res) {
                 return res.status(404).json({ data: null, error: "Portfolio not found" });
             }
             const { user, portfolio, wallet, userAssets } = userPortfolio;
+            const reportDate = reportDateParam ? new Date(reportDateParam) : new Date();
+            reportDate.setHours(0, 0, 0, 0);
+            const reportingPeriod = getQuarter(reportDate);
+            const storedReport = yield db_1.db.userPortfolioPerformanceReport.findFirst({
+                where: {
+                    userPortfolioId,
+                    reportDate: {
+                        gte: reportDate,
+                        lt: new Date(reportDate.getTime() + 24 * 60 * 60 * 1000),
+                    },
+                },
+                include: { assetSnapshots: true },
+                orderBy: { reportDate: "desc" },
+            });
+            const snapshotMap = new Map();
+            if ((_a = storedReport === null || storedReport === void 0 ? void 0 : storedReport.assetSnapshots) === null || _a === void 0 ? void 0 : _a.length) {
+                for (const s of storedReport.assetSnapshots) {
+                    snapshotMap.set(s.assetId, {
+                        closePrice: Number(s.closePrice),
+                        closeValue: Number(s.closeValue),
+                        lossGain: Number(s.lossGain),
+                    });
+                }
+            }
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const reportDateUTC = new Date(reportDate);
+            reportDateUTC.setUTCHours(0, 0, 0, 0);
+            const isPastDate = reportDateUTC.getTime() < todayUTC.getTime();
+            const historicalPriceMap = new Map();
+            if (isPastDate && snapshotMap.size === 0) {
+                const assetIds = userAssets.map((ua) => ua.assetId);
+                if (assetIds.length > 0) {
+                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                        where: {
+                            assetId: { in: assetIds },
+                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
+                        },
+                        orderBy: { priceDate: "desc" },
+                    });
+                    for (const row of historyRows) {
+                        if (!historicalPriceMap.has(row.assetId)) {
+                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                        }
+                    }
+                }
+            }
             let firstDeposit = yield db_1.db.deposit.findFirst({
                 where: { userId: userPortfolio.userId, depositTarget: "MASTER", isFirstDeposit: true },
                 select: { bankCost: true, transactionCost: true, cashAtBank: true, totalFees: true },
@@ -231,8 +279,6 @@ function generatePortfolioPdfReport(req, res) {
                     orderBy: { createdAt: "asc" },
                 });
             }
-            const reportDate = new Date();
-            const reportingPeriod = getQuarter(reportDate);
             let totalCostPrice = 0;
             let totalCloseValue = 0;
             let totalLossGain = 0;
@@ -240,22 +286,33 @@ function generatePortfolioPdfReport(req, res) {
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
             for (const ua of userAssets) {
-                const cost = Number((_a = ua.costPrice) !== null && _a !== void 0 ? _a : 0);
-                const close = Number((_b = ua.closeValue) !== null && _b !== void 0 ? _b : 0);
-                const gain = Number((_c = ua.lossGain) !== null && _c !== void 0 ? _c : 0);
+                const cost = Number((_b = ua.costPrice) !== null && _b !== void 0 ? _b : 0);
+                const snap = snapshotMap.get(ua.assetId);
+                const histPrice = historicalPriceMap.get(ua.assetId);
+                const closePrice = snap
+                    ? snap.closePrice
+                    : histPrice !== undefined
+                        ? histPrice
+                        : Number((_c = ua.asset.closePrice) !== null && _c !== void 0 ? _c : 0);
+                const closeValue = snap
+                    ? snap.closeValue
+                    : histPrice !== undefined
+                        ? histPrice * Number((_d = ua.stock) !== null && _d !== void 0 ? _d : 0)
+                        : Number((_e = ua.closeValue) !== null && _e !== void 0 ? _e : 0);
+                const gain = closeValue - cost;
                 totalCostPrice += cost;
-                totalCloseValue += close;
+                totalCloseValue += closeValue;
                 totalLossGain += gain;
                 const cls = determineAssetClass(ua.asset);
                 const entry = classMap.get(cls);
                 entry.holdings += 1;
-                entry.totalCashValue += close;
+                entry.totalCashValue += closeValue;
             }
             const returnPct = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
-            const bankFee = Number((_e = (_d = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.bankCost) !== null && _d !== void 0 ? _d : wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _e !== void 0 ? _e : 0);
-            const transactionFee = Number((_g = (_f = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.transactionCost) !== null && _f !== void 0 ? _f : wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _g !== void 0 ? _g : 0);
-            const feeAtBank = Number((_j = (_h = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.cashAtBank) !== null && _h !== void 0 ? _h : wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _j !== void 0 ? _j : 0);
-            const totalFees = Number((_l = (_k = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.totalFees) !== null && _k !== void 0 ? _k : wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _l !== void 0 ? _l : 0);
+            const bankFee = Number((_g = (_f = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.bankCost) !== null && _f !== void 0 ? _f : wallet === null || wallet === void 0 ? void 0 : wallet.bankFee) !== null && _g !== void 0 ? _g : 0);
+            const transactionFee = Number((_j = (_h = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.transactionCost) !== null && _h !== void 0 ? _h : wallet === null || wallet === void 0 ? void 0 : wallet.transactionFee) !== null && _j !== void 0 ? _j : 0);
+            const feeAtBank = Number((_l = (_k = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.cashAtBank) !== null && _k !== void 0 ? _k : wallet === null || wallet === void 0 ? void 0 : wallet.feeAtBank) !== null && _l !== void 0 ? _l : 0);
+            const totalFees = Number((_o = (_m = firstDeposit === null || firstDeposit === void 0 ? void 0 : firstDeposit.totalFees) !== null && _m !== void 0 ? _m : wallet === null || wallet === void 0 ? void 0 : wallet.totalFees) !== null && _o !== void 0 ? _o : 0);
             const grandTotal = totalCloseValue + feeAtBank;
             const doc = new pdfkit_1.default({
                 size: "A4",
@@ -276,7 +333,7 @@ function generatePortfolioPdfReport(req, res) {
             y = infoTable(doc, [
                 ["Client Name", `${user.firstName} ${user.lastName}`],
                 ["Fund Name", userPortfolio.customName || portfolio.name],
-                ["Account Number", (_o = (_m = user.masterWallet) === null || _m === void 0 ? void 0 : _m.accountNumber) !== null && _o !== void 0 ? _o : "—"],
+                ["Account Number", (_q = (_p = user.masterWallet) === null || _p === void 0 ? void 0 : _p.accountNumber) !== null && _q !== void 0 ? _q : "—"],
                 ["Reporting Period", reportingPeriod],
                 ["Report Date", fmtDate(reportDate)],
             ], y);
@@ -328,16 +385,28 @@ function generatePortfolioPdfReport(req, res) {
             y = tableHeader(doc, holdCols, y, 22);
             alt = false;
             for (const ua of userAssets) {
-                const gain = Number((_p = ua.lossGain) !== null && _p !== void 0 ? _p : 0);
+                const snap = snapshotMap.get(ua.assetId);
+                const histPrice = historicalPriceMap.get(ua.assetId);
+                const closePrice = snap
+                    ? snap.closePrice
+                    : histPrice !== undefined
+                        ? histPrice
+                        : Number((_r = ua.asset.closePrice) !== null && _r !== void 0 ? _r : 0);
+                const closeValue = snap
+                    ? snap.closeValue
+                    : histPrice !== undefined
+                        ? histPrice * Number((_s = ua.stock) !== null && _s !== void 0 ? _s : 0)
+                        : Number((_t = ua.closeValue) !== null && _t !== void 0 ? _t : 0);
+                const gain = closeValue - Number((_u = ua.costPrice) !== null && _u !== void 0 ? _u : 0);
                 y = tableRow(doc, holdCols, [
                     ua.asset.symbol,
                     ua.asset.description,
                     fmtNum(ua.stock, 2),
-                    `${Number((_q = ua.allocationPercentage) !== null && _q !== void 0 ? _q : 0).toFixed(0)}%`,
+                    `${Number((_v = ua.allocationPercentage) !== null && _v !== void 0 ? _v : 0).toFixed(0)}%`,
                     fmt$(ua.costPerShare),
                     fmt$(ua.costPrice),
-                    fmt$(ua.asset.closePrice),
-                    fmt$(ua.closeValue),
+                    fmt$(closePrice),
+                    fmt$(closeValue),
                     fmt$(gain),
                 ], y, 20, alt);
                 alt = !alt;

@@ -28,7 +28,7 @@ import portfolioSummaryRouter from "./routes/portfolio-summary";
 import migrationsRouter       from "./routes/migrations";
 import sendEmailRouter        from "./routes/send-email";
 
-import { startPortfolioReportCronFromEnv } from "./jobs/portfolio-report-cron";
+import { startPortfolioReportCronFromEnv, scheduleEATMidnightPriceSnapshot } from "./jobs/portfolio-report-cron";
 import { startLogRetentionJob } from "./jobs/logRetentionJob";
 
 import subPortfoliosRouter from "./routes/subportfolios";
@@ -53,6 +53,7 @@ const PORT = Number(process.env.PORT) || 8000;
 
 app.listen(PORT, "0.0.0.0", () => {
   startPortfolioReportCronFromEnv();
+  scheduleEATMidnightPriceSnapshot();
   startLogRetentionJob();
   console.log(`Server is running on http://localhost:${PORT}`);
 

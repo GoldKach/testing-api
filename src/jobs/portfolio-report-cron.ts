@@ -2,6 +2,11 @@
 import cron from "node-cron";
 import { generateDailyReportsForAllPortfolios } from "@/controllers/portfolio-performance-reports";
 import { generateDailyReportsForUser } from "@/controllers/portfolio-performance-reports";
+import { db } from "@/db/db";
+import { recordAssetPriceHistory } from "@/utils/cascade";
+
+// East African Time is UTC+3
+const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------------ */
 /*  Internal executor — system-wide (all active portfolios)            */
@@ -128,15 +133,66 @@ export function schedule30SecondPortfolioReports() {
 }
 
 /**
- * PRODUCTION — once per day at 1:00 AM (server time)
+ * PRODUCTION — once per day at 12:00 EAT (09:00 UTC)
  */
 export function scheduleDailyPortfolioReports() {
   console.log("============================================================");
   console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-  console.log("⏰ Reports every day at 1:00 AM");
+  console.log("⏰ Reports every day at 12:00 EAT (09:00 UTC)");
   console.log("============================================================");
-  cron.schedule("0 1 * * *", async () => {
+  cron.schedule("0 9 * * *", async () => {
     await executePortfolioReportJob("DAILY");
+  });
+}
+
+/**
+ * Snapshot all asset close prices into AssetPriceHistory every midnight EAT (21:00 UTC).
+ * Stores the price under the EAT calendar date so historical report queries find the correct price.
+ */
+export function scheduleEATMidnightPriceSnapshot() {
+  console.log("============================================================");
+  console.log("📸 EAT MIDNIGHT PRICE SNAPSHOT SCHEDULER INITIALIZED");
+  console.log("⏰ Snapshot every day at 00:00 EAT (21:00 UTC)");
+  console.log("============================================================");
+
+  // 21:00 UTC = 00:00 EAT (the start of the next EAT calendar day)
+  cron.schedule("0 21 * * *", async () => {
+    const startedAt = new Date().toISOString();
+    console.log("============================================================");
+    console.log(`📸 ASSET PRICE SNAPSHOT — midnight EAT`);
+    console.log(`   Started: ${startedAt}`);
+    console.log("============================================================");
+
+    try {
+      // At 21:00 UTC, the EAT clock reads 00:00 of the *next* UTC day.
+      const nowUTC = new Date();
+      const nowEAT = new Date(nowUTC.getTime() + EAT_OFFSET_MS);
+      // EAT date as UTC midnight — this is the date to record prices against.
+      const eatDateUTC = new Date(
+        Date.UTC(nowEAT.getUTCFullYear(), nowEAT.getUTCMonth(), nowEAT.getUTCDate())
+      );
+
+      const assets = await db.asset.findMany({
+        select: { id: true, symbol: true, closePrice: true },
+      });
+
+      const prices = assets
+        .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+        .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+
+      if (prices.length === 0) {
+        console.log("   No assets with close prices found — skipping snapshot.");
+        return;
+      }
+
+      await recordAssetPriceHistory(prices, eatDateUTC);
+
+      console.log(`   ✅ Snapshotted ${prices.length} asset prices for EAT date ${eatDateUTC.toISOString().slice(0, 10)}`);
+      console.log("============================================================");
+    } catch (err) {
+      console.error("❌ Price snapshot FAILED:", err);
+      console.log("============================================================");
+    }
   });
 }
 
