@@ -370,14 +370,14 @@ export async function updateWithdrawal(req: Request, res: Response) {
  *
  *   New portfolio (X2 — remaining position):
  *     stock         = oldStock − stocksSold
- *     costPrice     = alloc% × (oldTotalInvested − redemptionAmount)
+ *     costPrice     = unchanged  ← redemption is paid from investment return, not principal
  *     costPerShare  = unchanged (original purchase price)
  *     closeValue    = asset.closePrice × newStock   ← system price, never the approval price
- *     lossGain      = closeValue − costPrice
+ *     lossGain      = closeValue − costPrice  (naturally lower: same costPrice, less closeValue)
  *
  *   Portfolio wallet:
  *     balance       -= redemptionAmount
- *     netAssetValue -= redemptionAmount  (cost-basis NAV reduces proportionally)
+ *     netAssetValue = unchanged  ← cost basis does not change
  *
  *   Master wallet:
  *     balance        += redemptionAmount
@@ -516,7 +516,6 @@ export async function approveWithdrawal(req: Request, res: Response) {
       const { up } = redemptionContext!;
       const redemptionAmount = existing.amount;
       const nextGeneration   = (up.subPortfolios[0]?.generation ?? 0) + 1;
-      const newTotalInvested = Math.max(0, Number(up.totalInvested) - redemptionAmount);
 
       // Per-asset: compute sold stocks and new portfolio position
       const assetResults = up.userAssets.map((ua) => {
@@ -529,9 +528,10 @@ export async function approveWithdrawal(req: Request, res: Response) {
         const snapLossGain   = snapCloseValue - allocAmount;
 
         // ── X2 remaining portfolio — use SYSTEM close price, never the approval price ──
-        const newStock      = Math.max(0, Number(ua.stock) - stocksSold);
-        const newCostPrice  = (ua.allocationPercentage / 100) * newTotalInvested;
-        // costPerShare stays unchanged on redemption — it reflects the original purchase price
+        const newStock     = Math.max(0, Number(ua.stock) - stocksSold);
+        // costPrice is intentionally unchanged: redemption is paid from investment return,
+        // not from principal. closeValue shrinks (fewer shares) so lossGain absorbs the change.
+        const newCostPrice  = Number(ua.costPrice);
         const newCloseValue = Number(ua.asset.closePrice) * newStock;
         const newLossGain   = newCloseValue - newCostPrice;
 
@@ -608,8 +608,10 @@ export async function approveWithdrawal(req: Request, res: Response) {
       }
 
       // ── 3. Update UserPortfolio totals ─────────────────────────────────────
+      // totalInvested is NOT updated — cost basis is unchanged on redemption.
+      // portfolioValue shrinks because fewer shares are held at market price.
       const newPortfolioValue = assetResults.reduce((s, r) => s + r.x2.closeValue, 0);
-      const newTotalLossGain  = newPortfolioValue - newTotalInvested;
+      const newTotalLossGain  = newPortfolioValue - Number(up.totalInvested);
 
       await tx.userPortfolio.update({
         where: { id: existing.userPortfolioId! },
@@ -619,12 +621,11 @@ export async function approveWithdrawal(req: Request, res: Response) {
         },
       });
 
-      // ── 4. Portfolio wallet: balance and cost-basis NAV both reduce ─────────
+      // ── 4. Portfolio wallet: only cash balance reduces — NAV (cost basis) is unchanged ──
       await tx.portfolioWallet.update({
         where: { id: existing.portfolioWallet!.id },
         data: {
-          balance:       { decrement: redemptionAmount },
-          netAssetValue: { decrement: redemptionAmount },
+          balance: { decrement: redemptionAmount },
         },
       });
 

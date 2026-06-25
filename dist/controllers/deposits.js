@@ -115,7 +115,7 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
             const topupStock = (_a = topupStockByAsset.get(ua.assetId)) !== null && _a !== void 0 ? _a : 0;
             const newStock = ((_b = ua.stock) !== null && _b !== void 0 ? _b : 0) + topupStock;
             const costPrice = (ua.allocationPercentage / 100) * newNetAssetValue;
-            const costPerShare = newStock > 0 ? costPrice / newStock : 0;
+            const costPerShare = ua.costPerShare;
             const closeValue = ua.asset.closePrice * newStock;
             const lossGain = closeValue - costPrice;
             return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };

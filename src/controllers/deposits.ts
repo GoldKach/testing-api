@@ -150,14 +150,15 @@ async function applyTopup(
   //   lossGain     = closeValue − costPrice
   const newNetAssetValue = newTotalInvested;
 
-  // 2. Merge into mother portfolio — stock accumulates, everything else recalculates
+  // 2. Merge into mother portfolio — stock accumulates, everything else recalculates.
+  // costPerShare is intentionally kept at the admin-set original value — it must never change
+  // on a top-up because it represents the initial subscription price, not a rolling average.
   // closePrice for X2 always comes from the system (asset table), NOT the approval-time price.
-  // The approval-time close price is only used to value the X1 sub-portfolio snapshot.
   const assetUpdates = up.userAssets.map((ua) => {
     const topupStock   = topupStockByAsset.get(ua.assetId) ?? 0;
     const newStock     = (ua.stock ?? 0) + topupStock;
     const costPrice    = (ua.allocationPercentage / 100) * newNetAssetValue;
-    const costPerShare = newStock > 0 ? costPrice / newStock : 0;
+    const costPerShare = ua.costPerShare;                  // preserve original admin-set price
     const closeValue   = ua.asset.closePrice * newStock;   // system price, not approval-time price
     const lossGain     = closeValue - costPrice;
     return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };

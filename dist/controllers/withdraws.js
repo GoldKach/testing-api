@@ -411,7 +411,6 @@ function approveWithdrawal(req, res) {
                 const { up } = redemptionContext;
                 const redemptionAmount = existing.amount;
                 const nextGeneration = ((_c = (_b = up.subPortfolios[0]) === null || _b === void 0 ? void 0 : _b.generation) !== null && _c !== void 0 ? _c : 0) + 1;
-                const newTotalInvested = Math.max(0, Number(up.totalInvested) - redemptionAmount);
                 const assetResults = up.userAssets.map((ua) => {
                     const adminClosePrice = assetPrices[ua.assetId];
                     const allocAmount = (ua.allocationPercentage / 100) * redemptionAmount;
@@ -419,7 +418,7 @@ function approveWithdrawal(req, res) {
                     const snapCloseValue = adminClosePrice * stocksSold;
                     const snapLossGain = snapCloseValue - allocAmount;
                     const newStock = Math.max(0, Number(ua.stock) - stocksSold);
-                    const newCostPrice = (ua.allocationPercentage / 100) * newTotalInvested;
+                    const newCostPrice = Number(ua.costPrice);
                     const newCloseValue = Number(ua.asset.closePrice) * newStock;
                     const newLossGain = newCloseValue - newCostPrice;
                     return {
@@ -488,7 +487,7 @@ function approveWithdrawal(req, res) {
                     });
                 }
                 const newPortfolioValue = assetResults.reduce((s, r) => s + r.x2.closeValue, 0);
-                const newTotalLossGain = newPortfolioValue - newTotalInvested;
+                const newTotalLossGain = newPortfolioValue - Number(up.totalInvested);
                 yield tx.userPortfolio.update({
                     where: { id: existing.userPortfolioId },
                     data: {
@@ -500,7 +499,6 @@ function approveWithdrawal(req, res) {
                     where: { id: existing.portfolioWallet.id },
                     data: {
                         balance: { decrement: redemptionAmount },
-                        netAssetValue: { decrement: redemptionAmount },
                     },
                 });
                 yield tx.masterWallet.updateMany({

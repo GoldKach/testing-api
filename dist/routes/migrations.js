@@ -5,4 +5,6 @@ const express_1 = require("express");
 const migrationsRouter = (0, express_1.Router)();
 migrationsRouter.post("/migrations/backfill-portfolios", migrations_1.backfillPortfoliosToNewStructure);
 migrationsRouter.post("/migrations/reactivate-all-users", migrations_1.reactivateAllUsers);
+migrationsRouter.post("/migrations/reset-cost-per-share", migrations_1.resetCostPerShareToOriginal);
+migrationsRouter.post("/migrations/reset-cost-price", migrations_1.resetCostPriceAfterRedemptions);
 exports.default = migrationsRouter;

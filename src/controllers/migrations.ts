@@ -4,6 +4,249 @@ import { db } from "@/db/db";
 import { randomInt } from "crypto";
 
 /* ------------------------------------------------------------------ */
+/*  POST /migrations/reset-cost-per-share                              */
+/*                                                                      */
+/*  Admin-only. Idempotent — safe to call multiple times.              */
+/*  Resets UserPortfolioAsset.costPerShare back to the original value  */
+/*  stored in the generation=0 SubPortfolioAsset (the admin-set price  */
+/*  from when the portfolio was first allocated).                       */
+/*  Only touches portfolios that had top-ups (generation > 0 exists).  */
+/*  Body: { dryRun?: boolean }                                         */
+/* ------------------------------------------------------------------ */
+export async function resetCostPerShareToOriginal(req: Request, res: Response) {
+  try {
+    const { dryRun = false } = (req.body ?? {}) as { dryRun?: boolean };
+
+    // Find all portfolios that had at least one top-up
+    const affectedPortfolios = await db.userPortfolio.findMany({
+      where: {
+        subPortfolios: { some: { generation: { gt: 0 } } },
+      },
+      include: {
+        userAssets: {
+          include: { asset: { select: { id: true, symbol: true } } },
+        },
+        subPortfolios: {
+          where:   { generation: 0 },
+          include: { assets: true },
+        },
+      },
+    });
+
+    const results: Array<{
+      userPortfolioId: string;
+      customName: string;
+      changes: Array<{ assetId: string; symbol: string; from: number; to: number }>;
+    }> = [];
+    let totalUpdated = 0;
+
+    for (const up of affectedPortfolios) {
+      const gen0Sub = up.subPortfolios.find((s) => s.generation === 0);
+      if (!gen0Sub) continue;
+
+      // Build map: assetId → original admin-set costPerShare
+      const originalPrices = new Map<string, number>();
+      for (const spa of gen0Sub.assets) {
+        originalPrices.set(spa.assetId, spa.costPerShare);
+      }
+
+      const changes: Array<{ assetId: string; symbol: string; from: number; to: number }> = [];
+
+      for (const ua of up.userAssets) {
+        const originalCPS = originalPrices.get(ua.assetId);
+        if (originalCPS === undefined) continue;
+        if (Math.abs(ua.costPerShare - originalCPS) < 0.0001) continue; // already correct
+
+        changes.push({
+          assetId: ua.assetId,
+          symbol:  ua.asset.symbol,
+          from:    ua.costPerShare,
+          to:      originalCPS,
+        });
+
+        if (!dryRun) {
+          await db.userPortfolioAsset.update({
+            where: { id: ua.id },
+            data:  { costPerShare: originalCPS },
+          });
+          totalUpdated++;
+        }
+      }
+
+      if (changes.length > 0) {
+        results.push({ userPortfolioId: up.id, customName: up.customName ?? up.id, changes });
+      }
+    }
+
+    console.log("============================================================");
+    console.log(`${dryRun ? "[DRY RUN] " : ""}RESET COST PER SHARE MIGRATION`);
+    console.log(`  Portfolios affected : ${results.length}`);
+    if (!dryRun) console.log(`  Asset rows updated  : ${totalUpdated}`);
+    console.log("============================================================");
+
+    return res.status(200).json({
+      data: {
+        dryRun,
+        portfoliosAffected: results.length,
+        ...(dryRun ? {} : { totalAssetsUpdated: totalUpdated }),
+        details: results,
+      },
+      error: null,
+      message: dryRun
+        ? `Dry run: ${results.length} portfolio(s) have drifted costPerShare — no changes applied.`
+        : `Reset complete: ${results.length} portfolio(s), ${totalUpdated} asset row(s) updated.`,
+    });
+  } catch (err: any) {
+    console.error("resetCostPerShareToOriginal error:", err);
+    return res.status(500).json({ data: null, error: "Migration failed: " + err.message });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /migrations/reset-cost-price                                  */
+/*                                                                      */
+/*  Admin-only. Idempotent — safe to call multiple times.              */
+/*  Fixes UserPortfolioAsset.costPrice for portfolios that had         */
+/*  redemptions: redemptions incorrectly reduced costPrice/totalInvested*/
+/*  instead of absorbing the change through lossGain (investment return)*/
+/*                                                                      */
+/*  Correct totalInvested = gen-0 amount + all top-up amounts          */
+/*  (redemption amounts are excluded — they come from investment return)*/
+/*  Correct costPrice per asset = alloc% × correctTotalInvested        */
+/*  Body: { dryRun?: boolean }                                         */
+/* ------------------------------------------------------------------ */
+export async function resetCostPriceAfterRedemptions(req: Request, res: Response) {
+  try {
+    const { dryRun = false } = (req.body ?? {}) as { dryRun?: boolean };
+
+    // Only portfolios that have at least one redemption sub-portfolio
+    // Redemption: generation > 0 AND topupEventId IS NULL (top-ups have topupEventId set)
+    const affectedPortfolios = await db.userPortfolio.findMany({
+      where: {
+        subPortfolios: {
+          some: { generation: { gt: 0 }, topupEventId: null },
+        },
+      },
+      include: {
+        userAssets: {
+          include: { asset: { select: { id: true, symbol: true, closePrice: true } } },
+        },
+        subPortfolios: {
+          select: { generation: true, amountInvested: true, topupEventId: true },
+        },
+        wallet: { select: { id: true, netAssetValue: true } },
+      },
+    });
+
+    const results: Array<{
+      userPortfolioId: string;
+      customName: string;
+      previousTotalInvested: number;
+      correctTotalInvested: number;
+      assetChanges: Array<{ assetId: string; symbol: string; costPriceFrom: number; costPriceTo: number; lossGainFrom: number; lossGainTo: number }>;
+    }> = [];
+    let totalAssetsUpdated = 0;
+
+    for (const up of affectedPortfolios) {
+      // Correct totalInvested = gen-0 + all top-up sub-portfolios (topupEventId IS NOT NULL)
+      const correctTotalInvested = up.subPortfolios.reduce((sum, sp) => {
+        const isOriginal = sp.generation === 0;
+        const isTopup    = sp.topupEventId !== null;
+        return sum + ((isOriginal || isTopup) ? Number(sp.amountInvested) : 0);
+      }, 0);
+
+      const previousTotalInvested = Number(up.totalInvested);
+      if (Math.abs(correctTotalInvested - previousTotalInvested) < 0.01) continue; // already correct
+
+      const assetChanges: Array<{
+        id: string; assetId: string; symbol: string;
+        costPriceFrom: number; costPriceTo: number;
+        lossGainFrom: number; lossGainTo: number;
+        newCloseValue: number;
+      }> = [];
+
+      for (const ua of up.userAssets) {
+        const correctCostPrice = (ua.allocationPercentage / 100) * correctTotalInvested;
+        const currentCloseValue = Number(ua.closeValue);
+        const correctLossGain  = currentCloseValue - correctCostPrice;
+
+        if (Math.abs(Number(ua.costPrice) - correctCostPrice) < 0.01) continue;
+
+        assetChanges.push({
+          id:            ua.id,
+          assetId:       ua.assetId,
+          symbol:        ua.asset.symbol,
+          costPriceFrom: Number(ua.costPrice),
+          costPriceTo:   correctCostPrice,
+          lossGainFrom:  Number(ua.lossGain),
+          lossGainTo:    correctLossGain,
+          newCloseValue: currentCloseValue,
+        });
+      }
+
+      if (!dryRun) {
+        // Update each asset
+        for (const ch of assetChanges) {
+          await db.userPortfolioAsset.update({
+            where: { id: ch.id },
+            data:  { costPrice: ch.costPriceTo, lossGain: ch.lossGainTo },
+          });
+          totalAssetsUpdated++;
+        }
+
+        // Update portfolio totalInvested and totalLossGain
+        const portfolioValue = Number(up.portfolioValue ?? 0);
+        await db.userPortfolio.update({
+          where: { id: up.id },
+          data: {
+            totalInvested: correctTotalInvested,
+            totalLossGain: portfolioValue - correctTotalInvested,
+          },
+        });
+
+        // Restore portfolio wallet netAssetValue to correct cost-basis NAV
+        if (up.wallet) {
+          await db.portfolioWallet.update({
+            where: { id: up.wallet.id },
+            data:  { netAssetValue: correctTotalInvested },
+          });
+        }
+      }
+
+      results.push({
+        userPortfolioId:       up.id,
+        customName:            up.customName ?? up.id,
+        previousTotalInvested,
+        correctTotalInvested,
+        assetChanges: assetChanges.map(({ id: _id, newCloseValue: _cv, ...rest }) => rest),
+      });
+    }
+
+    console.log("============================================================");
+    console.log(`${dryRun ? "[DRY RUN] " : ""}RESET COST PRICE AFTER REDEMPTIONS`);
+    console.log(`  Portfolios affected : ${results.length}`);
+    if (!dryRun) console.log(`  Asset rows updated  : ${totalAssetsUpdated}`);
+    console.log("============================================================");
+
+    return res.status(200).json({
+      data: {
+        dryRun,
+        portfoliosAffected: results.length,
+        ...(dryRun ? {} : { totalAssetsUpdated }),
+        details: results,
+      },
+      error: null,
+      message: dryRun
+        ? `Dry run: ${results.length} portfolio(s) have incorrect costPrice from past redemptions — no changes applied.`
+        : `Reset complete: ${results.length} portfolio(s), ${totalAssetsUpdated} asset row(s) updated.`,
+    });
+  } catch (err: any) {
+    console.error("resetCostPriceAfterRedemptions error:", err);
+    return res.status(500).json({ data: null, error: "Migration failed: " + err.message });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
