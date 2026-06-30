@@ -244,26 +244,21 @@ function generatePortfolioPdfReport(req, res) {
                     });
                 }
             }
-            const todayUTC = new Date();
-            todayUTC.setUTCHours(0, 0, 0, 0);
             const reportDateUTC = new Date(reportDate);
             reportDateUTC.setUTCHours(0, 0, 0, 0);
-            const isPastDate = reportDateUTC.getTime() < todayUTC.getTime();
             const historicalPriceMap = new Map();
-            if (isPastDate && snapshotMap.size === 0) {
-                const assetIds = userAssets.map((ua) => ua.assetId);
-                if (assetIds.length > 0) {
-                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
-                        where: {
-                            assetId: { in: assetIds },
-                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-                        },
-                        orderBy: { priceDate: "desc" },
-                    });
-                    for (const row of historyRows) {
-                        if (!historicalPriceMap.has(row.assetId)) {
-                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-                        }
+            const assetIds = userAssets.map((ua) => ua.assetId);
+            if (assetIds.length > 0) {
+                const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                    where: {
+                        assetId: { in: assetIds },
+                        priceDate: { lte: reportDateUTC },
+                    },
+                    orderBy: { priceDate: "desc" },
+                });
+                for (const row of historyRows) {
+                    if (!historicalPriceMap.has(row.assetId)) {
+                        historicalPriceMap.set(row.assetId, Number(row.closePrice));
                     }
                 }
             }

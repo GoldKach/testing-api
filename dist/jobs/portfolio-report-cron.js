@@ -19,6 +19,7 @@ exports.schedule2MinutePortfolioReports = schedule2MinutePortfolioReports;
 exports.schedule5MinutePortfolioReports = schedule5MinutePortfolioReports;
 exports.schedule10MinutePortfolioReports = schedule10MinutePortfolioReports;
 exports.schedule30SecondPortfolioReports = schedule30SecondPortfolioReports;
+exports.snapshotLivePricesForToday = snapshotLivePricesForToday;
 exports.scheduleDailyPortfolioReports = scheduleDailyPortfolioReports;
 exports.scheduleEATMidnightPriceSnapshot = scheduleEATMidnightPriceSnapshot;
 exports.startPortfolioReportCronFromEnv = startPortfolioReportCronFromEnv;
@@ -127,12 +128,34 @@ function schedule30SecondPortfolioReports() {
         void executePortfolioReportJob("30-SECOND");
     }, 30 * 1000);
 }
+function snapshotLivePricesForToday() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const todayUTC = new Date();
+        todayUTC.setUTCHours(0, 0, 0, 0);
+        const assets = yield db_1.db.asset.findMany({
+            select: { id: true, symbol: true, closePrice: true },
+        });
+        const updates = assets
+            .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+            .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+        if (updates.length === 0) {
+            console.log("   [price-snapshot] No assets with prices — skipped.");
+            return;
+        }
+        yield (0, cascade_1.recordAssetPriceHistory)(updates, todayUTC);
+        console.log(`   [price-snapshot] Recorded ${updates.length} live price(s) for ${todayUTC.toISOString().slice(0, 10)}`);
+    });
+}
 function scheduleDailyPortfolioReports() {
     console.log("============================================================");
     console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-    console.log("⏰ Reports every day at 12:00 EAT (09:00 UTC)");
+    console.log("⏰ Snapshot + reports every day at 14:00 EAT (11:00 UTC)");
     console.log("============================================================");
-    node_cron_1.default.schedule("0 9 * * *", () => __awaiter(this, void 0, void 0, function* () {
+    node_cron_1.default.schedule("0 11 * * *", () => __awaiter(this, void 0, void 0, function* () {
+        console.log("============================================================");
+        console.log("📸 Step 1 — Snapshotting live prices for today (2 PM EAT)");
+        console.log("============================================================");
+        yield snapshotLivePricesForToday();
         yield executePortfolioReportJob("DAILY");
     }));
 }

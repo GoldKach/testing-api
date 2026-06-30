@@ -9,6 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.generateAndSaveReport = generateAndSaveReport;
 exports.generateDailyReportsForAllPortfolios = generateDailyReportsForAllPortfolios;
 exports.generateAllPortfoliosForDate = generateAllPortfoliosForDate;
 exports.generatePerformanceReport = generatePerformanceReport;
@@ -22,6 +23,7 @@ exports.cleanupPerformanceReports = cleanupPerformanceReports;
 exports.generateDailyReportsForUser = generateDailyReportsForUser;
 exports.backfillAssetSnapshots = backfillAssetSnapshots;
 const db_1 = require("../db/db");
+const report_errors_1 = require("../utils/report-errors");
 function determineAssetClass(asset) {
     var _a, _b, _c;
     if (asset.assetClass)
@@ -42,8 +44,8 @@ function determineAssetClass(asset) {
     return "EQUITIES";
 }
 function generatePortfolioReport(userPortfolioId_1) {
-    return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date()) {
-        var _a, _b, _c, _e, _f, _g, _h, _j, _k;
+    return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date(), strict = true) {
+        var _a, _b, _c, _e, _f, _g, _h, _j;
         try {
             const userPortfolio = yield db_1.db.userPortfolio.findUnique({
                 where: { id: userPortfolioId },
@@ -85,28 +87,27 @@ function generatePortfolioReport(userPortfolioId_1) {
                     assetSnapshots: [],
                 };
             }
-            const todayUTC = new Date();
-            todayUTC.setUTCHours(0, 0, 0, 0);
             const reportDateUTC = new Date(reportDate);
             reportDateUTC.setUTCHours(0, 0, 0, 0);
-            const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+            const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
             const historicalPriceMap = new Map();
-            if (!isToday) {
-                const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
-                if (assetIds.length > 0) {
-                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
-                        where: {
-                            assetId: { in: assetIds },
-                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-                        },
-                        orderBy: { priceDate: "desc" },
-                    });
-                    for (const row of historyRows) {
-                        if (!historicalPriceMap.has(row.assetId)) {
-                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-                        }
-                    }
+            const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+            if (assetIds.length > 0) {
+                const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                    where: {
+                        assetId: { in: assetIds },
+                        priceDate: reportDateUTC,
+                    },
+                });
+                for (const row of historyRows) {
+                    historicalPriceMap.set(row.assetId, Number(row.closePrice));
                 }
+            }
+            const missingAssets = userPortfolio.userAssets
+                .filter((ua) => !historicalPriceMap.has(ua.assetId))
+                .map((ua) => { var _a; return ({ assetId: ua.assetId, symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : ua.assetId }); });
+            if (strict !== false && missingAssets.length > 0) {
+                throw new report_errors_1.MissingHistoryPricesError(missingAssets, reportDateStr);
             }
             let totalCostPrice = 0;
             let totalCloseValue = 0;
@@ -118,12 +119,8 @@ function generatePortfolioReport(userPortfolioId_1) {
                 const costPrice = Number((_g = ua.costPrice) !== null && _g !== void 0 ? _g : 0);
                 const stock = Number((_h = ua.stock) !== null && _h !== void 0 ? _h : 0);
                 const histPrice = historicalPriceMap.get(ua.assetId);
-                const closePrice = isToday || histPrice === undefined
-                    ? Number((_j = ua.asset.closePrice) !== null && _j !== void 0 ? _j : 0)
-                    : histPrice;
-                const closeValue = isToday || histPrice === undefined
-                    ? Number((_k = ua.closeValue) !== null && _k !== void 0 ? _k : 0)
-                    : closePrice * stock;
+                const closePrice = histPrice !== undefined ? histPrice : Number((_j = ua.asset.closePrice) !== null && _j !== void 0 ? _j : 0);
+                const closeValue = closePrice * stock;
                 const lossGain = closeValue - costPrice;
                 totalCostPrice += costPrice;
                 totalCloseValue += closeValue;
@@ -167,22 +164,18 @@ function generatePortfolioReport(userPortfolioId_1) {
                 cashAtBank: sub.cashAtBank,
             }));
             const assetSnapshots = userPortfolio.userAssets.map((ua) => {
-                var _a, _b, _c, _e, _f, _g, _h;
+                var _a, _b, _c, _e, _f, _g;
                 const stock = Number((_a = ua.stock) !== null && _a !== void 0 ? _a : 0);
                 const costPrice = Number((_b = ua.costPrice) !== null && _b !== void 0 ? _b : 0);
                 const histPrice = historicalPriceMap.get(ua.assetId);
-                const closePrice = isToday || histPrice === undefined
-                    ? Number((_c = ua.asset.closePrice) !== null && _c !== void 0 ? _c : 0)
-                    : histPrice;
-                const closeValue = isToday || histPrice === undefined
-                    ? Number((_e = ua.closeValue) !== null && _e !== void 0 ? _e : 0)
-                    : closePrice * stock;
+                const closePrice = histPrice !== undefined ? histPrice : Number((_c = ua.asset.closePrice) !== null && _c !== void 0 ? _c : 0);
+                const closeValue = closePrice * stock;
                 return {
                     assetId: ua.assetId,
-                    symbol: (_f = ua.asset.symbol) !== null && _f !== void 0 ? _f : "",
-                    description: (_g = ua.asset.description) !== null && _g !== void 0 ? _g : "",
+                    symbol: (_e = ua.asset.symbol) !== null && _e !== void 0 ? _e : "",
+                    description: (_f = ua.asset.description) !== null && _f !== void 0 ? _f : "",
                     stock,
-                    costPerShare: Number((_h = ua.costPerShare) !== null && _h !== void 0 ? _h : 0),
+                    costPerShare: Number((_g = ua.costPerShare) !== null && _g !== void 0 ? _g : 0),
                     costPrice,
                     closePrice,
                     closeValue,
@@ -273,10 +266,17 @@ function savePortfolioReport(report) {
     });
 }
 function generateAndSaveReport(userPortfolioId_1) {
-    return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date()) {
-        const report = yield generatePortfolioReport(userPortfolioId, reportDate);
+    return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date(), strict = true) {
+        const report = yield generatePortfolioReport(userPortfolioId, reportDate, strict);
         if (!report)
             return null;
+        const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+        yield db_1.db.userPortfolioPerformanceReport.deleteMany({
+            where: {
+                userPortfolioId,
+                reportDate: { gte: reportDate, lt: nextDay },
+            },
+        });
         return savePortfolioReport(report);
     });
 }
@@ -307,7 +307,7 @@ function generateDailyReportsForAllPortfolios() {
                     success++;
                     continue;
                 }
-                const reportId = yield generateAndSaveReport(portfolio.id, reportDate);
+                const reportId = yield generateAndSaveReport(portfolio.id, reportDate, false);
                 if (reportId) {
                     success++;
                 }
@@ -327,6 +327,7 @@ function generateDailyReportsForAllPortfolios() {
 }
 function generateAllPortfoliosForDate(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _e;
         try {
             const { reportDate: reportDateStr } = req.body;
             if (!reportDateStr) {
@@ -337,33 +338,38 @@ function generateAllPortfoliosForDate(req, res) {
             const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
             const allPortfolios = yield db_1.db.userPortfolio.findMany({
                 where: { isActive: true },
-                select: { id: true },
+                select: { id: true, customName: true },
             });
             let success = 0, failed = 0;
             const errors = [];
+            const missingPrices = [];
             for (const portfolio of allPortfolios) {
                 try {
-                    yield db_1.db.userPortfolioPerformanceReport.deleteMany({
-                        where: {
-                            userPortfolioId: portfolio.id,
-                            reportDate: { gte: reportDate, lt: nextDay },
-                        },
-                    });
-                    const reportId = yield generateAndSaveReport(portfolio.id, reportDate);
+                    const reportId = yield generateAndSaveReport(portfolio.id, reportDate, true);
                     if (reportId)
                         success++;
                     else {
                         failed++;
-                        errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
+                        errors.push(`${(_a = portfolio.customName) !== null && _a !== void 0 ? _a : portfolio.id}: Failed to generate`);
                     }
                 }
                 catch (err) {
                     failed++;
-                    errors.push(`Portfolio ${portfolio.id}: ${err.message}`);
+                    if (err instanceof report_errors_1.MissingHistoryPricesError) {
+                        missingPrices.push({
+                            portfolioId: portfolio.id,
+                            portfolioName: (_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id,
+                            missingAssets: err.missingAssets.map((a) => a.symbol),
+                        });
+                        errors.push(`${(_c = portfolio.customName) !== null && _c !== void 0 ? _c : portfolio.id}: Missing close prices for [${err.missingAssets.map((a) => a.symbol).join(", ")}] on ${reportDateStr}`);
+                    }
+                    else {
+                        errors.push(`${(_e = portfolio.customName) !== null && _e !== void 0 ? _e : portfolio.id}: ${err.message}`);
+                    }
                 }
             }
             return res.status(200).json({
-                data: { total: allPortfolios.length, success, failed, errors },
+                data: { total: allPortfolios.length, success, failed, errors, missingPrices },
                 error: null,
             });
         }
@@ -657,7 +663,7 @@ function generateDailyReportsForUser(userId) {
                     skipped++;
                     continue;
                 }
-                const reportId = yield generateAndSaveReport(up.id, reportDate);
+                const reportId = yield generateAndSaveReport(up.id, reportDate, false);
                 if (reportId) {
                     success++;
                 }

@@ -12,6 +12,7 @@ import {
 import {
   generateUserPerformanceReports,
   regeneratePerformanceReport,
+  generateTodayReport,
 } from "@/controllers/portfolio-performance-report";
 import { generatePortfolioPdfReport } from "@/controllers/portfolio-pdf-report";
 
@@ -50,6 +51,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/regenerate",
   regeneratePerformanceReport
+);
+
+// Generate today's report using CURRENT live prices (snapshots prices first)
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-today",
+  generateTodayReport
 );
 
 // Generate for all portfolios system-wide (cron)

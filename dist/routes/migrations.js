@@ -7,4 +7,5 @@ migrationsRouter.post("/migrations/backfill-portfolios", migrations_1.backfillPo
 migrationsRouter.post("/migrations/reactivate-all-users", migrations_1.reactivateAllUsers);
 migrationsRouter.post("/migrations/reset-cost-per-share", migrations_1.resetCostPerShareToOriginal);
 migrationsRouter.post("/migrations/reset-cost-price", migrations_1.resetCostPriceAfterRedemptions);
+migrationsRouter.post("/migrations/fix-report-close-prices", migrations_1.fixReportClosePrices);
 exports.default = migrationsRouter;

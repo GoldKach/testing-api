@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import type { AssetClass, Prisma } from "@prisma/client";
 import { MissingHistoryPricesError } from "@/utils/report-errors";
+import { recordAssetPriceHistory } from "@/utils/cascade";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -724,7 +725,7 @@ export async function regeneratePerformanceReport(req: Request, res: Response) {
     if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
 
     const date = reportDate ? new Date(reportDate) : new Date();
-    date.setHours(0, 0, 0, 0);
+    date.setUTCHours(0, 0, 0, 0);
     const nextDay = new Date(date.getTime() + 24 * 60 * 60 * 1000);
 
     // Delete any existing report(s) for this portfolio + date
@@ -785,5 +786,74 @@ export async function cleanupPerformanceReports(req: Request, res: Response) {
   } catch (error) {
     console.error("cleanupPerformanceReports error:", error);
     return res.status(500).json({ data: null, error: "Failed to cleanup old reports" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate-today                  */
+/*  Snapshots current live prices for today into AssetPriceHistory,    */
+/*  then generates (or re-generates) today's report for this portfolio  */
+/*  using those just-captured prices.                                   */
+/* ------------------------------------------------------------------ */
+export async function generateTodayReport(req: Request, res: Response) {
+  try {
+    const { userPortfolioId } = req.body as { userPortfolioId?: string };
+    if (!userPortfolioId) {
+      return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+    }
+
+    const portfolio = await db.userPortfolio.findUnique({
+      where:  { id: userPortfolioId },
+      select: { id: true, customName: true },
+    });
+    if (!portfolio) return res.status(404).json({ data: null, error: "Portfolio not found" });
+
+    // Step 1 — Snapshot current live prices for today (overwrites any existing entry)
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+
+    const assets = await db.asset.findMany({
+      select: { id: true, symbol: true, closePrice: true },
+    });
+    const updates = assets
+      .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+      .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+
+    if (updates.length > 0) {
+      await recordAssetPriceHistory(updates, todayUTC);
+      console.log(`[generateTodayReport] Snapshotted ${updates.length} live prices for ${todayUTC.toISOString().slice(0, 10)}`);
+    }
+
+    // Step 2 — Delete existing today's report and generate fresh
+    const nextDay = new Date(todayUTC.getTime() + 24 * 60 * 60 * 1000);
+    await db.userPortfolioPerformanceReport.deleteMany({
+      where: { userPortfolioId, reportDate: { gte: todayUTC, lt: nextDay } },
+    });
+
+    const reportId = await generateAndSaveReport(userPortfolioId, todayUTC);
+    if (!reportId) {
+      return res.status(500).json({ data: null, error: "Failed to generate report" });
+    }
+
+    const report = await db.userPortfolioPerformanceReport.findUnique({
+      where:   { id: reportId },
+      include: REPORT_INCLUDE,
+    });
+
+    return res.status(201).json({
+      data:    report,
+      message: `Today's report generated with current live prices`,
+      error:   null,
+    });
+  } catch (error: any) {
+    if (error instanceof MissingHistoryPricesError) {
+      return res.status(422).json({
+        data:         null,
+        error:        error.message,
+        missingAssets: error.missingAssets.map((a) => a.symbol),
+      });
+    }
+    console.error("generateTodayReport error:", error);
+    return res.status(500).json({ data: null, error: "Failed to generate today's report" });
   }
 }

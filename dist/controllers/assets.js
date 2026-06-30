@@ -265,6 +265,9 @@ function getAssetPriceHistory(req, res) {
             if (isNaN(date.getTime())) {
                 return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
             }
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const isToday = date.getTime() === todayUTC.getTime();
             const [assets, historyRows] = yield Promise.all([
                 db_1.db.asset.findMany({
                     orderBy: { symbol: "asc" },
@@ -279,6 +282,23 @@ function getAssetPriceHistory(req, res) {
             for (const row of historyRows) {
                 if (!historicalMap.has(row.assetId)) {
                     historicalMap.set(row.assetId, { closePrice: Number(row.closePrice), priceDate: row.priceDate });
+                }
+            }
+            if (isToday) {
+                const needsSnapshot = assets.filter((a) => {
+                    const h = historicalMap.get(a.id);
+                    return !h || h.priceDate.getTime() !== date.getTime();
+                });
+                if (needsSnapshot.length > 0) {
+                    const updates = needsSnapshot
+                        .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+                        .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+                    if (updates.length > 0) {
+                        yield (0, cascade_1.recordAssetPriceHistory)(updates, date);
+                        for (const u of updates) {
+                            historicalMap.set(u.assetId, { closePrice: u.closePrice, priceDate: date });
+                        }
+                    }
                 }
             }
             const result = assets.map((asset) => {

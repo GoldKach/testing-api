@@ -137,7 +137,7 @@ export function schedule30SecondPortfolioReports() {
  * Called before daily report generation so reports use the captured midday prices,
  * and future date lookups return the exact price as it was at report time.
  */
-async function snapshotLivePricesForToday() {
+export async function snapshotLivePricesForToday() {
   const todayUTC = new Date();
   todayUTC.setUTCHours(0, 0, 0, 0);
 
@@ -159,20 +159,20 @@ async function snapshotLivePricesForToday() {
 }
 
 /**
- * PRODUCTION — once per day at 12:00 EAT (09:00 UTC).
+ * PRODUCTION — once per day at 14:00 EAT (11:00 UTC).
  * Step 1: snapshot all live close prices for today into AssetPriceHistory.
  * Step 2: generate portfolio performance reports (which read from AssetPriceHistory).
- * This ensures reports always use the captured midday price, and looking up today's
+ * This ensures reports always use the 2 PM EAT price, and looking up today's
  * date in the future returns exactly what the price was at report generation time.
  */
 export function scheduleDailyPortfolioReports() {
   console.log("============================================================");
   console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-  console.log("⏰ Snapshot + reports every day at 12:00 EAT (09:00 UTC)");
+  console.log("⏰ Snapshot + reports every day at 14:00 EAT (11:00 UTC)");
   console.log("============================================================");
-  cron.schedule("0 9 * * *", async () => {
+  cron.schedule("0 11 * * *", async () => {
     console.log("============================================================");
-    console.log("📸 Step 1 — Snapshotting live prices for today");
+    console.log("📸 Step 1 — Snapshotting live prices for today (2 PM EAT)");
     console.log("============================================================");
     await snapshotLivePricesForToday();
     await executePortfolioReportJob("DAILY");

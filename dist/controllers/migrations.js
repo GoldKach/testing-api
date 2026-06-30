@@ -24,8 +24,11 @@ exports.resetCostPerShareToOriginal = resetCostPerShareToOriginal;
 exports.resetCostPriceAfterRedemptions = resetCostPriceAfterRedemptions;
 exports.backfillPortfoliosToNewStructure = backfillPortfoliosToNewStructure;
 exports.reactivateAllUsers = reactivateAllUsers;
+exports.fixReportClosePrices = fixReportClosePrices;
 const db_1 = require("../db/db");
 const crypto_1 = require("crypto");
+const portfolio_performance_reports_1 = require("../controllers/portfolio-performance-reports");
+const report_errors_1 = require("../utils/report-errors");
 function resetCostPerShareToOriginal(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b;
@@ -474,6 +477,112 @@ function reactivateAllUsers(req, res) {
         catch (err) {
             console.error("reactivateAllUsers error:", err);
             return res.status(500).json({ data: null, error: "Reactivation failed: " + err.message });
+        }
+    });
+}
+function fixReportClosePrices(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d;
+        try {
+            const dryRun = ((_a = req.body) === null || _a === void 0 ? void 0 : _a.dryRun) === true;
+            const reports = yield db_1.db.userPortfolioPerformanceReport.findMany({
+                include: {
+                    assetSnapshots: true,
+                    userPortfolio: {
+                        select: { id: true, customName: true },
+                    },
+                },
+            });
+            const fixed = [];
+            const skippedNoHistory = [];
+            const skippedAlreadyCorrect = [];
+            const errors = [];
+            for (const report of reports) {
+                const portfolioId = report.userPortfolioId;
+                const portfolioName = (_c = (_b = report.userPortfolio) === null || _b === void 0 ? void 0 : _b.customName) !== null && _c !== void 0 ? _c : portfolioId;
+                const reportDateUTC = report.reportDate;
+                const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
+                if (!report.assetSnapshots || report.assetSnapshots.length === 0) {
+                    continue;
+                }
+                const snapshotPriceMap = new Map();
+                for (const snap of report.assetSnapshots) {
+                    snapshotPriceMap.set(snap.assetId, Number(snap.closePrice));
+                }
+                const assetIds = Array.from(snapshotPriceMap.keys());
+                const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                    where: {
+                        assetId: { in: assetIds },
+                        priceDate: reportDateUTC,
+                    },
+                    select: { assetId: true, closePrice: true },
+                });
+                const historyMap = new Map();
+                for (const row of historyRows) {
+                    historyMap.set(row.assetId, Number(row.closePrice));
+                }
+                const missingAssets = [];
+                for (const snap of report.assetSnapshots) {
+                    if (!historyMap.has(snap.assetId)) {
+                        missingAssets.push((_d = snap.symbol) !== null && _d !== void 0 ? _d : snap.assetId);
+                    }
+                }
+                if (missingAssets.length > 0) {
+                    skippedNoHistory.push({ portfolioId, portfolioName, reportDate: reportDateStr, missingAssets });
+                    continue;
+                }
+                let allMatch = true;
+                for (const snap of report.assetSnapshots) {
+                    const histPrice = historyMap.get(snap.assetId);
+                    const snapPrice = Number(snap.closePrice);
+                    if (Math.abs(histPrice - snapPrice) > 0.0001) {
+                        allMatch = false;
+                        break;
+                    }
+                }
+                if (allMatch) {
+                    skippedAlreadyCorrect.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+                    continue;
+                }
+                if (!dryRun) {
+                    try {
+                        yield (0, portfolio_performance_reports_1.generateAndSaveReport)(portfolioId, reportDateUTC, true);
+                        fixed.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+                    }
+                    catch (err) {
+                        if (err instanceof report_errors_1.MissingHistoryPricesError) {
+                            skippedNoHistory.push({
+                                portfolioId,
+                                portfolioName,
+                                reportDate: reportDateStr,
+                                missingAssets: err.missingAssets.map((a) => a.symbol),
+                            });
+                        }
+                        else {
+                            errors.push({ portfolioId, portfolioName, reportDate: reportDateStr, error: err.message });
+                        }
+                    }
+                }
+                else {
+                    fixed.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+                }
+            }
+            console.log("============================================================");
+            console.log(`${dryRun ? "[DRY RUN] " : ""}✅ FIX REPORT CLOSE PRICES COMPLETE`);
+            console.log(`   Reports fixed              : ${fixed.length}`);
+            console.log(`   Skipped (no history)       : ${skippedNoHistory.length}`);
+            console.log(`   Skipped (already correct)  : ${skippedAlreadyCorrect.length}`);
+            console.log(`   Errors                     : ${errors.length}`);
+            console.log("============================================================");
+            return res.status(200).json({
+                data: { fixed, skippedNoHistory, skippedAlreadyCorrect, errors },
+                error: null,
+                message: `${dryRun ? "[DRY RUN] " : ""}Fixed ${fixed.length} report(s). Skipped ${skippedNoHistory.length} (missing history), ${skippedAlreadyCorrect.length} (already correct). ${errors.length} error(s).`,
+            });
+        }
+        catch (err) {
+            console.error("fixReportClosePrices error:", err);
+            return res.status(500).json({ data: null, error: "Fix failed: " + err.message });
         }
     });
 }

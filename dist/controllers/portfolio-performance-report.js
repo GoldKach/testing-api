@@ -20,7 +20,10 @@ exports.getPerformanceReportById = getPerformanceReportById;
 exports.getPerformanceStatistics = getPerformanceStatistics;
 exports.regeneratePerformanceReport = regeneratePerformanceReport;
 exports.cleanupPerformanceReports = cleanupPerformanceReports;
+exports.generateTodayReport = generateTodayReport;
 const db_1 = require("../db/db");
+const report_errors_1 = require("../utils/report-errors");
+const cascade_1 = require("../utils/cascade");
 function determineAssetClass(asset) {
     var _a, _b, _c;
     if (asset.assetClass)
@@ -77,28 +80,27 @@ function generatePortfolioReport(userPortfolioId_1) {
                     assetSnapshots: [],
                 };
             }
-            const todayUTC = new Date();
-            todayUTC.setUTCHours(0, 0, 0, 0);
             const reportDateUTC = new Date(reportDate);
             reportDateUTC.setUTCHours(0, 0, 0, 0);
-            const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+            const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
             const historicalPriceMap = new Map();
-            if (!isToday) {
-                const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
-                if (assetIds.length > 0) {
-                    const historyRows = yield db_1.db.assetPriceHistory.findMany({
-                        where: {
-                            assetId: { in: assetIds },
-                            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-                        },
-                        orderBy: { priceDate: "desc" },
-                    });
-                    for (const row of historyRows) {
-                        if (!historicalPriceMap.has(row.assetId)) {
-                            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-                        }
-                    }
+            const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+            if (assetIds.length > 0) {
+                const historyRows = yield db_1.db.assetPriceHistory.findMany({
+                    where: {
+                        assetId: { in: assetIds },
+                        priceDate: reportDateUTC,
+                    },
+                });
+                for (const row of historyRows) {
+                    historicalPriceMap.set(row.assetId, Number(row.closePrice));
                 }
+            }
+            const missingAssets = userPortfolio.userAssets
+                .filter((ua) => !historicalPriceMap.has(ua.assetId))
+                .map((ua) => { var _a; return ({ assetId: ua.assetId, symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : ua.assetId }); });
+            if (missingAssets.length > 0) {
+                throw new report_errors_1.MissingHistoryPricesError(missingAssets, reportDateStr);
             }
             let totalCostPrice = 0;
             let totalCloseValue = 0;
@@ -110,13 +112,8 @@ function generatePortfolioReport(userPortfolioId_1) {
             for (const ua of userPortfolio.userAssets) {
                 const costPrice = Number((_e = ua.costPrice) !== null && _e !== void 0 ? _e : 0);
                 const stock = Number((_f = ua.stock) !== null && _f !== void 0 ? _f : 0);
-                const historicalPrice = historicalPriceMap.get(ua.assetId);
-                const closePrice = isToday || historicalPrice === undefined
-                    ? Number((_g = ua.asset.closePrice) !== null && _g !== void 0 ? _g : 0)
-                    : historicalPrice;
-                const closeValue = isToday || historicalPrice === undefined
-                    ? Number((_h = ua.closeValue) !== null && _h !== void 0 ? _h : 0)
-                    : closePrice * stock;
+                const closePrice = (_g = historicalPriceMap.get(ua.assetId)) !== null && _g !== void 0 ? _g : Number((_h = ua.asset.closePrice) !== null && _h !== void 0 ? _h : 0);
+                const closeValue = closePrice * stock;
                 const lossGain = closeValue - costPrice;
                 totalCostPrice += costPrice;
                 totalCloseValue += closeValue;
@@ -579,7 +576,7 @@ function regeneratePerformanceReport(req, res) {
             if (!portfolio)
                 return res.status(404).json({ data: null, error: "Portfolio not found" });
             const date = reportDate ? new Date(reportDate) : new Date();
-            date.setHours(0, 0, 0, 0);
+            date.setUTCHours(0, 0, 0, 0);
             const nextDay = new Date(date.getTime() + 24 * 60 * 60 * 1000);
             const deleted = yield db_1.db.userPortfolioPerformanceReport.deleteMany({
                 where: {
@@ -602,6 +599,13 @@ function regeneratePerformanceReport(req, res) {
             });
         }
         catch (error) {
+            if (error instanceof report_errors_1.MissingHistoryPricesError) {
+                return res.status(422).json({
+                    data: null,
+                    error: error.message,
+                    missingAssets: error.missingAssets.map((a) => a.symbol),
+                });
+            }
             console.error("regeneratePerformanceReport error:", error);
             return res.status(500).json({ data: null, error: "Failed to regenerate report" });
         }
@@ -626,6 +630,62 @@ function cleanupPerformanceReports(req, res) {
         catch (error) {
             console.error("cleanupPerformanceReports error:", error);
             return res.status(500).json({ data: null, error: "Failed to cleanup old reports" });
+        }
+    });
+}
+function generateTodayReport(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { userPortfolioId } = req.body;
+            if (!userPortfolioId) {
+                return res.status(400).json({ data: null, error: "userPortfolioId is required" });
+            }
+            const portfolio = yield db_1.db.userPortfolio.findUnique({
+                where: { id: userPortfolioId },
+                select: { id: true, customName: true },
+            });
+            if (!portfolio)
+                return res.status(404).json({ data: null, error: "Portfolio not found" });
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const assets = yield db_1.db.asset.findMany({
+                select: { id: true, symbol: true, closePrice: true },
+            });
+            const updates = assets
+                .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+                .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+            if (updates.length > 0) {
+                yield (0, cascade_1.recordAssetPriceHistory)(updates, todayUTC);
+                console.log(`[generateTodayReport] Snapshotted ${updates.length} live prices for ${todayUTC.toISOString().slice(0, 10)}`);
+            }
+            const nextDay = new Date(todayUTC.getTime() + 24 * 60 * 60 * 1000);
+            yield db_1.db.userPortfolioPerformanceReport.deleteMany({
+                where: { userPortfolioId, reportDate: { gte: todayUTC, lt: nextDay } },
+            });
+            const reportId = yield generateAndSaveReport(userPortfolioId, todayUTC);
+            if (!reportId) {
+                return res.status(500).json({ data: null, error: "Failed to generate report" });
+            }
+            const report = yield db_1.db.userPortfolioPerformanceReport.findUnique({
+                where: { id: reportId },
+                include: REPORT_INCLUDE,
+            });
+            return res.status(201).json({
+                data: report,
+                message: `Today's report generated with current live prices`,
+                error: null,
+            });
+        }
+        catch (error) {
+            if (error instanceof report_errors_1.MissingHistoryPricesError) {
+                return res.status(422).json({
+                    data: null,
+                    error: error.message,
+                    missingAssets: error.missingAssets.map((a) => a.symbol),
+                });
+            }
+            console.error("generateTodayReport error:", error);
+            return res.status(500).json({ data: null, error: "Failed to generate today's report" });
         }
     });
 }

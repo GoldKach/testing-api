@@ -11,6 +11,11 @@ import {
   cleanupPerformanceReports,
   backfillAssetSnapshots,
 } from "@/controllers/portfolio-performance-reports";
+import {
+  generateUserPerformanceReports,
+  regeneratePerformanceReport,
+  generateTodayReport,
+} from "@/controllers/portfolio-performance-report";
 
 const portfolioPerformanceReportsRouter = Router();
 
@@ -38,6 +43,24 @@ portfolioPerformanceReportsRouter.get(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/generate",
   generatePerformanceReport
+);
+
+// Generate for all portfolios of a single user
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-for-user",
+  generateUserPerformanceReports
+);
+
+// Force-regenerate: delete existing report for portfolio + date, recreate from AssetPriceHistory
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/regenerate",
+  regeneratePerformanceReport
+);
+
+// Generate today's report: snapshots live prices first, then generates
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-today",
+  generateTodayReport
 );
 
 // Generate reports for all portfolios (cron job endpoint)

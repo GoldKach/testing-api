@@ -606,11 +606,7 @@ export async function fixReportClosePrices(req: Request, res: Response) {
     // Fetch all stored reports with their asset snapshots and portfolio info
     const reports = await db.userPortfolioPerformanceReport.findMany({
       include: {
-        assetSnapshots: {
-          include: {
-            asset: { select: { id: true, symbol: true } },
-          },
-        },
+        assetSnapshots: true,
         userPortfolio: {
           select: { id: true, customName: true },
         },
@@ -658,7 +654,7 @@ export async function fixReportClosePrices(req: Request, res: Response) {
       const missingAssets: string[] = [];
       for (const snap of report.assetSnapshots) {
         if (!historyMap.has(snap.assetId)) {
-          missingAssets.push(snap.asset?.symbol ?? snap.assetId);
+          missingAssets.push(snap.symbol ?? snap.assetId);
         }
       }
 
