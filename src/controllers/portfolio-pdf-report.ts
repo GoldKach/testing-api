@@ -305,30 +305,26 @@ export async function generatePortfolioPdfReport(req: Request, res: Response) {
       }
     }
 
-    // Fallback: if no stored snapshots (old report or never generated), look up
-    // AssetPriceHistory directly for past-date PDFs so correct historical prices
-    // entered on the Price History admin page are always used.
-    const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
+    // Always look up AssetPriceHistory — prices stored at UTC midnight so
+    // lte reportDateUTC gives exact-date match first, most recent prior as fallback.
+    // Live price is last resort only. snapshotMap (stored report snapshots) takes
+    // highest priority when available.
     const reportDateUTC = new Date(reportDate);
     reportDateUTC.setUTCHours(0, 0, 0, 0);
-    const isPastDate = reportDateUTC.getTime() < todayUTC.getTime();
 
     const historicalPriceMap = new Map<string, number>(); // assetId → closePrice from AssetPriceHistory
-    if (isPastDate && snapshotMap.size === 0) {
-      const assetIds = userAssets.map((ua) => ua.assetId);
-      if (assetIds.length > 0) {
-        const historyRows = await db.assetPriceHistory.findMany({
-          where: {
-            assetId:   { in: assetIds },
-            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-          },
-          orderBy: { priceDate: "desc" },
-        });
-        for (const row of historyRows) {
-          if (!historicalPriceMap.has(row.assetId)) {
-            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-          }
+    const assetIds = userAssets.map((ua) => ua.assetId);
+    if (assetIds.length > 0) {
+      const historyRows = await db.assetPriceHistory.findMany({
+        where: {
+          assetId:   { in: assetIds },
+          priceDate: { lte: reportDateUTC },
+        },
+        orderBy: { priceDate: "desc" },
+      });
+      for (const row of historyRows) {
+        if (!historicalPriceMap.has(row.assetId)) {
+          historicalPriceMap.set(row.assetId, Number(row.closePrice));
         }
       }
     }

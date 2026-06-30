@@ -540,6 +540,7 @@
 import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import type { AssetClass, Prisma } from "@prisma/client";
+import { MissingHistoryPricesError } from "@/utils/report-errors";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -628,7 +629,8 @@ function determineAssetClass(asset: any): AssetClass {
 
 async function generatePortfolioReport(
   userPortfolioId: string,
-  reportDate: Date = new Date()
+  reportDate: Date = new Date(),
+  strict = true,   // false = cron mode (fall back to live on missing history)
 ): Promise<GeneratedReport | null> {
   try {
     const userPortfolio = await db.userPortfolio.findUnique({
@@ -679,32 +681,36 @@ async function generatePortfolioReport(
       };
     }
 
-    // ── Resolve historical close prices for past-date reports ─────────
-    // Check AssetPriceHistory so prices set on the admin Price History page
-    // are used when regenerating any past report.
-    const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
+    // ── Resolve close prices from AssetPriceHistory (exact date match) ──
+    // strict = true  → throw MissingHistoryPricesError if any asset has no price
+    //                   for exactly this date (used by all explicit API generation)
+    // strict = false → fall back to live price when history is missing
+    //                   (used by daily cron which already snapshots before this runs)
     const reportDateUTC = new Date(reportDate);
     reportDateUTC.setUTCHours(0, 0, 0, 0);
-    const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+    const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
 
-    const historicalPriceMap = new Map<string, number>(); // assetId → historical closePrice
-    if (!isToday) {
-      const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
-      if (assetIds.length > 0) {
-        const historyRows = await db.assetPriceHistory.findMany({
-          where: {
-            assetId:   { in: assetIds },
-            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-          },
-          orderBy: { priceDate: "desc" },
-        });
-        for (const row of historyRows) {
-          if (!historicalPriceMap.has(row.assetId)) {
-            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-          }
-        }
+    const historicalPriceMap = new Map<string, number>(); // assetId → close price for reportDate
+    const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+    if (assetIds.length > 0) {
+      const historyRows = await db.assetPriceHistory.findMany({
+        where: {
+          assetId:   { in: assetIds },
+          priceDate: reportDateUTC,   // exact date match only
+        },
+      });
+      for (const row of historyRows) {
+        historicalPriceMap.set(row.assetId, Number(row.closePrice));
       }
+    }
+
+    // In strict mode, all assets must have a history price for this exact date
+    const missingAssets = userPortfolio.userAssets
+      .filter((ua) => !historicalPriceMap.has(ua.assetId))
+      .map((ua) => ({ assetId: ua.assetId, symbol: ua.asset.symbol ?? ua.assetId }));
+
+    if (strict !== false && missingAssets.length > 0) {
+      throw new MissingHistoryPricesError(missingAssets, reportDateStr);
     }
 
     // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
@@ -720,13 +726,10 @@ async function generatePortfolioReport(
       const costPrice  = Number(ua.costPrice ?? 0);
       const stock      = Number(ua.stock     ?? 0);
       const histPrice  = historicalPriceMap.get(ua.assetId);
-      const closePrice = isToday || histPrice === undefined
-        ? Number(ua.asset.closePrice ?? 0)
-        : histPrice;
-      const closeValue = isToday || histPrice === undefined
-        ? Number(ua.closeValue ?? 0)
-        : closePrice * stock;
-      const lossGain = closeValue - costPrice;
+      // strict=false (cron) falls back to live price when history is missing
+      const closePrice = histPrice !== undefined ? histPrice : Number(ua.asset.closePrice ?? 0);
+      const closeValue = closePrice * stock;
+      const lossGain   = closeValue - costPrice;
 
       totalCostPrice  += costPrice;
       totalCloseValue += closeValue;
@@ -783,17 +786,13 @@ async function generatePortfolioReport(
       cashAtBank:      sub.cashAtBank,
     }));
 
-    // ── Per-asset snapshot: capture historical price at this report date ──
+    // ── Per-asset snapshot: lock in the history price for this report date ─
     const assetSnapshots: AssetSnapshot[] = userPortfolio.userAssets.map((ua) => {
       const stock      = Number(ua.stock     ?? 0);
       const costPrice  = Number(ua.costPrice ?? 0);
       const histPrice  = historicalPriceMap.get(ua.assetId);
-      const closePrice = isToday || histPrice === undefined
-        ? Number(ua.asset.closePrice ?? 0)
-        : histPrice;
-      const closeValue = isToday || histPrice === undefined
-        ? Number(ua.closeValue ?? 0)
-        : closePrice * stock;
+      const closePrice = histPrice !== undefined ? histPrice : Number(ua.asset.closePrice ?? 0);
+      const closeValue = closePrice * stock;
       return {
         assetId:      ua.assetId,
         symbol:       ua.asset.symbol      ?? "",
@@ -887,12 +886,32 @@ async function savePortfolioReport(report: GeneratedReport): Promise<string | nu
   }
 }
 
-async function generateAndSaveReport(
+/**
+ * Generate a fresh report for the given portfolio + date, replacing any
+ * previously stored report for that date so prices are always recalculated
+ * from AssetPriceHistory.
+ *
+ * strict = true  (default) → throws MissingHistoryPricesError if any asset
+ *                            has no price in AssetPriceHistory for this exact date.
+ * strict = false            → falls back to live price (used by daily cron which
+ *                            snapshots prices immediately before calling this).
+ */
+export async function generateAndSaveReport(
   userPortfolioId: string,
-  reportDate: Date = new Date()
+  reportDate: Date = new Date(),
+  strict = true,
 ): Promise<string | null> {
-  const report = await generatePortfolioReport(userPortfolioId, reportDate);
+  const report = await generatePortfolioReport(userPortfolioId, reportDate, strict);
   if (!report) return null;
+
+  const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+  await db.userPortfolioPerformanceReport.deleteMany({
+    where: {
+      userPortfolioId,
+      reportDate: { gte: reportDate, lt: nextDay },
+    },
+  });
+
   return savePortfolioReport(report);
 }
 
@@ -932,7 +951,7 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
 
       if (existing) { success++; continue; }
 
-      const reportId = await generateAndSaveReport(portfolio.id, reportDate);
+      const reportId = await generateAndSaveReport(portfolio.id, reportDate, false); // cron: live fallback ok
       if (reportId) { success++; }
       else {
         failed++;
@@ -968,36 +987,39 @@ export async function generateAllPortfoliosForDate(req: Request, res: Response) 
 
     const allPortfolios = await db.userPortfolio.findMany({
       where:  { isActive: true },
-      select: { id: true },
+      select: { id: true, customName: true },
     });
 
     let success = 0, failed = 0;
     const errors: string[] = [];
+    const missingPrices: Array<{ portfolioId: string; portfolioName: string; missingAssets: string[] }> = [];
 
     for (const portfolio of allPortfolios) {
       try {
-        // Remove any existing report for this date so we get fresh close prices
-        await db.userPortfolioPerformanceReport.deleteMany({
-          where: {
-            userPortfolioId: portfolio.id,
-            reportDate: { gte: reportDate, lt: nextDay },
-          },
-        });
-
-        const reportId = await generateAndSaveReport(portfolio.id, reportDate);
+        // generateAndSaveReport deletes the existing report then recreates it
+        const reportId = await generateAndSaveReport(portfolio.id, reportDate, true);
         if (reportId) success++;
         else {
           failed++;
-          errors.push(`Portfolio ${portfolio.id}: Failed to generate`);
+          errors.push(`${portfolio.customName ?? portfolio.id}: Failed to generate`);
         }
       } catch (err: any) {
         failed++;
-        errors.push(`Portfolio ${portfolio.id}: ${err.message}`);
+        if (err instanceof MissingHistoryPricesError) {
+          missingPrices.push({
+            portfolioId:   portfolio.id,
+            portfolioName: portfolio.customName ?? portfolio.id,
+            missingAssets: err.missingAssets.map((a) => a.symbol),
+          });
+          errors.push(`${portfolio.customName ?? portfolio.id}: Missing close prices for [${err.missingAssets.map((a) => a.symbol).join(", ")}] on ${reportDateStr}`);
+        } else {
+          errors.push(`${portfolio.customName ?? portfolio.id}: ${err.message}`);
+        }
       }
     }
 
     return res.status(200).json({
-      data: { total: allPortfolios.length, success, failed, errors },
+      data: { total: allPortfolios.length, success, failed, errors, missingPrices },
       error: null,
     });
   } catch (error) {
@@ -1345,7 +1367,7 @@ export async function generateDailyReportsForUser(userId: string): Promise<{
 
       if (existing) { skipped++; continue; }
 
-      const reportId = await generateAndSaveReport(up.id, reportDate);
+      const reportId = await generateAndSaveReport(up.id, reportDate, false); // deposit trigger: live fallback ok
       if (reportId) { success++; }
       else {
         failed++;

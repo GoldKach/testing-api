@@ -133,14 +133,48 @@ export function schedule30SecondPortfolioReports() {
 }
 
 /**
- * PRODUCTION — once per day at 12:00 EAT (09:00 UTC)
+ * Snapshots all current live asset close prices into AssetPriceHistory for today (UTC date).
+ * Called before daily report generation so reports use the captured midday prices,
+ * and future date lookups return the exact price as it was at report time.
+ */
+async function snapshotLivePricesForToday() {
+  const todayUTC = new Date();
+  todayUTC.setUTCHours(0, 0, 0, 0);
+
+  const assets = await db.asset.findMany({
+    select: { id: true, symbol: true, closePrice: true },
+  });
+
+  const updates = assets
+    .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+    .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+
+  if (updates.length === 0) {
+    console.log("   [price-snapshot] No assets with prices — skipped.");
+    return;
+  }
+
+  await recordAssetPriceHistory(updates, todayUTC);
+  console.log(`   [price-snapshot] Recorded ${updates.length} live price(s) for ${todayUTC.toISOString().slice(0, 10)}`);
+}
+
+/**
+ * PRODUCTION — once per day at 12:00 EAT (09:00 UTC).
+ * Step 1: snapshot all live close prices for today into AssetPriceHistory.
+ * Step 2: generate portfolio performance reports (which read from AssetPriceHistory).
+ * This ensures reports always use the captured midday price, and looking up today's
+ * date in the future returns exactly what the price was at report generation time.
  */
 export function scheduleDailyPortfolioReports() {
   console.log("============================================================");
   console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-  console.log("⏰ Reports every day at 12:00 EAT (09:00 UTC)");
+  console.log("⏰ Snapshot + reports every day at 12:00 EAT (09:00 UTC)");
   console.log("============================================================");
   cron.schedule("0 9 * * *", async () => {
+    console.log("============================================================");
+    console.log("📸 Step 1 — Snapshotting live prices for today");
+    console.log("============================================================");
+    await snapshotLivePricesForToday();
     await executePortfolioReportJob("DAILY");
   });
 }

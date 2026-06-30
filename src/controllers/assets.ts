@@ -416,6 +416,11 @@ export async function getAssetPriceHistory(req: Request, res: Response) {
       return res.status(400).json({ data: null, error: "Invalid date format — use YYYY-MM-DD" });
     }
 
+    // Is the requested date today (UTC)?
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const isToday = date.getTime() === todayUTC.getTime();
+
     const [assets, historyRows] = await Promise.all([
       db.asset.findMany({
         orderBy: { symbol: "asc" },
@@ -432,6 +437,31 @@ export async function getAssetPriceHistory(req: Request, res: Response) {
     for (const row of historyRows) {
       if (!historicalMap.has(row.assetId)) {
         historicalMap.set(row.assetId, { closePrice: Number(row.closePrice), priceDate: row.priceDate });
+      }
+    }
+
+    // Auto-snapshot: when loading TODAY's prices, persist live prices for any asset
+    // that has no entry specifically for today yet. This ensures that in the future,
+    // looking up today's date returns the actual live prices as they were at load time.
+    if (isToday) {
+      const needsSnapshot = assets.filter((a) => {
+        const h = historicalMap.get(a.id);
+        // No history at all, or existing history is from a previous date (not today)
+        return !h || h.priceDate.getTime() !== date.getTime();
+      });
+
+      if (needsSnapshot.length > 0) {
+        const updates = needsSnapshot
+          .filter((a) => a.closePrice !== null && a.closePrice !== undefined)
+          .map((a) => ({ assetId: a.id, closePrice: Number(a.closePrice) }));
+
+        if (updates.length > 0) {
+          await recordAssetPriceHistory(updates, date);
+          // Reflect the newly stored prices in the map so the response shows "Stored"
+          for (const u of updates) {
+            historicalMap.set(u.assetId, { closePrice: u.closePrice, priceDate: date });
+          }
+        }
       }
     }
 

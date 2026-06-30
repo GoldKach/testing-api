@@ -2,6 +2,7 @@
 import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import type { AssetClass, Prisma } from "@prisma/client";
+import { MissingHistoryPricesError } from "@/utils/report-errors";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -131,36 +132,31 @@ async function generatePortfolioReport(
       };
     }
 
-    // ── Resolve historical close prices for the report date ──────────
-    // For past dates we look up AssetPriceHistory to get the price that was
-    // valid on that day, not whatever the live price happens to be right now.
-    const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
+    // ── Resolve close prices from AssetPriceHistory (exact date match) ──
     const reportDateUTC = new Date(reportDate);
     reportDateUTC.setUTCHours(0, 0, 0, 0);
-    const isToday = reportDateUTC.getTime() === todayUTC.getTime();
+    const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
 
-    // assetId → close price valid on reportDate (or most recent price before it)
     const historicalPriceMap = new Map<string, number>();
-
-    if (!isToday) {
-      const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
-      if (assetIds.length > 0) {
-        // Fetch all history rows on or before the report date, ordered newest first.
-        // We take the first (most recent) row per asset to find the price valid on that date.
-        const historyRows = await db.assetPriceHistory.findMany({
-          where: {
-            assetId:   { in: assetIds },
-            priceDate: { lte: new Date(reportDateUTC.getTime() + 24 * 60 * 60 * 1000 - 1) },
-          },
-          orderBy: { priceDate: "desc" },
-        });
-        for (const row of historyRows) {
-          if (!historicalPriceMap.has(row.assetId)) {
-            historicalPriceMap.set(row.assetId, Number(row.closePrice));
-          }
-        }
+    const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
+    if (assetIds.length > 0) {
+      const historyRows = await db.assetPriceHistory.findMany({
+        where: {
+          assetId:   { in: assetIds },
+          priceDate: reportDateUTC,   // exact date only
+        },
+      });
+      for (const row of historyRows) {
+        historicalPriceMap.set(row.assetId, Number(row.closePrice));
       }
+    }
+
+    // Throw if any asset is missing a history price for this exact date
+    const missingAssets = userPortfolio.userAssets
+      .filter((ua) => !historicalPriceMap.has(ua.assetId))
+      .map((ua) => ({ assetId: ua.assetId, symbol: ua.asset.symbol ?? ua.assetId }));
+    if (missingAssets.length > 0) {
+      throw new MissingHistoryPricesError(missingAssets, reportDateStr);
     }
 
     // ── Compute totals ───────────────────────────────────────────────
@@ -178,15 +174,8 @@ async function generatePortfolioReport(
       const costPrice  = Number(ua.costPrice ?? 0);
       const stock      = Number(ua.stock     ?? 0);
 
-      // For past-date reports: use the historical price for that date.
-      // For today: use the pre-computed closeValue already in the DB (live).
-      const historicalPrice = historicalPriceMap.get(ua.assetId);
-      const closePrice = isToday || historicalPrice === undefined
-        ? Number(ua.asset.closePrice ?? 0)
-        : historicalPrice;
-      const closeValue = isToday || historicalPrice === undefined
-        ? Number(ua.closeValue ?? 0)
-        : closePrice * stock;
+      const closePrice = historicalPriceMap.get(ua.assetId) ?? Number(ua.asset.closePrice ?? 0);
+      const closeValue = closePrice * stock;
       const lossGain = closeValue - costPrice;
 
       totalCostPrice  += costPrice;
@@ -761,7 +750,14 @@ export async function regeneratePerformanceReport(req: Request, res: Response) {
       message: `Report regenerated${deleted.count > 0 ? ` (replaced ${deleted.count} existing)` : ""}`,
       error:   null,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error instanceof MissingHistoryPricesError) {
+      return res.status(422).json({
+        data:  null,
+        error: error.message,
+        missingAssets: error.missingAssets.map((a) => a.symbol),
+      });
+    }
     console.error("regeneratePerformanceReport error:", error);
     return res.status(500).json({ data: null, error: "Failed to regenerate report" });
   }

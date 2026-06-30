@@ -2,6 +2,8 @@
 import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import { randomInt } from "crypto";
+import { generateAndSaveReport } from "@/controllers/portfolio-performance-reports";
+import { MissingHistoryPricesError } from "@/utils/report-errors";
 
 /* ------------------------------------------------------------------ */
 /*  POST /migrations/reset-cost-per-share                              */
@@ -587,5 +589,139 @@ export async function reactivateAllUsers(req: Request, res: Response) {
   } catch (err: any) {
     console.error("reactivateAllUsers error:", err);
     return res.status(500).json({ data: null, error: "Reactivation failed: " + err.message });
+  }
+}
+
+// ─── Fix Report Close Prices ────────────────────────────────────────────────
+// Scans existing UserPortfolioPerformanceReport rows, compares stored snapshot
+// close prices against AssetPriceHistory for that exact date.
+// • If ANY asset has no history for that date  → skip, add to skippedNoHistory
+// • If ALL prices already match history        → skip, add to skippedAlreadyCorrect
+// • If prices differ (all history exists)      → regenerate the report
+// Portfolios with NO stored report for a date are not touched.
+export async function fixReportClosePrices(req: Request, res: Response) {
+  try {
+    const dryRun = req.body?.dryRun === true;
+
+    // Fetch all stored reports with their asset snapshots and portfolio info
+    const reports = await db.userPortfolioPerformanceReport.findMany({
+      include: {
+        assetSnapshots: {
+          include: {
+            asset: { select: { id: true, symbol: true } },
+          },
+        },
+        userPortfolio: {
+          select: { id: true, customName: true },
+        },
+      },
+    });
+
+    const fixed: Array<{ portfolioId: string; portfolioName: string; reportDate: string }> = [];
+    const skippedNoHistory: Array<{ portfolioId: string; portfolioName: string; reportDate: string; missingAssets: string[] }> = [];
+    const skippedAlreadyCorrect: Array<{ portfolioId: string; portfolioName: string; reportDate: string }> = [];
+    const errors: Array<{ portfolioId: string; portfolioName: string; reportDate: string; error: string }> = [];
+
+    for (const report of reports) {
+      const portfolioId = report.userPortfolioId;
+      const portfolioName = report.userPortfolio?.customName ?? portfolioId;
+      const reportDateUTC = report.reportDate; // already stored as UTC midnight Date
+      const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
+
+      if (!report.assetSnapshots || report.assetSnapshots.length === 0) {
+        // No snapshots to verify — skip silently
+        continue;
+      }
+
+      // Build map of assetId → stored close price from snapshot
+      const snapshotPriceMap = new Map<string, number>();
+      for (const snap of report.assetSnapshots) {
+        snapshotPriceMap.set(snap.assetId, Number(snap.closePrice));
+      }
+
+      // Query exact-date history for each asset in this report
+      const assetIds = Array.from(snapshotPriceMap.keys());
+      const historyRows = await db.assetPriceHistory.findMany({
+        where: {
+          assetId: { in: assetIds },
+          priceDate: reportDateUTC,
+        },
+        select: { assetId: true, closePrice: true },
+      });
+
+      const historyMap = new Map<string, number>();
+      for (const row of historyRows) {
+        historyMap.set(row.assetId, Number(row.closePrice));
+      }
+
+      // Check for missing history
+      const missingAssets: string[] = [];
+      for (const snap of report.assetSnapshots) {
+        if (!historyMap.has(snap.assetId)) {
+          missingAssets.push(snap.asset?.symbol ?? snap.assetId);
+        }
+      }
+
+      if (missingAssets.length > 0) {
+        skippedNoHistory.push({ portfolioId, portfolioName, reportDate: reportDateStr, missingAssets });
+        continue;
+      }
+
+      // Check if all prices already match
+      let allMatch = true;
+      for (const snap of report.assetSnapshots) {
+        const histPrice = historyMap.get(snap.assetId)!;
+        const snapPrice = Number(snap.closePrice);
+        // Allow tiny floating point tolerance
+        if (Math.abs(histPrice - snapPrice) > 0.0001) {
+          allMatch = false;
+          break;
+        }
+      }
+
+      if (allMatch) {
+        skippedAlreadyCorrect.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+        continue;
+      }
+
+      // Prices differ — regenerate
+      if (!dryRun) {
+        try {
+          await generateAndSaveReport(portfolioId, reportDateUTC, true);
+          fixed.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+        } catch (err: any) {
+          if (err instanceof MissingHistoryPricesError) {
+            skippedNoHistory.push({
+              portfolioId,
+              portfolioName,
+              reportDate: reportDateStr,
+              missingAssets: err.missingAssets.map((a) => a.symbol),
+            });
+          } else {
+            errors.push({ portfolioId, portfolioName, reportDate: reportDateStr, error: err.message });
+          }
+        }
+      } else {
+        // Dry run — report what would be fixed
+        fixed.push({ portfolioId, portfolioName, reportDate: reportDateStr });
+      }
+    }
+
+    console.log("============================================================");
+    console.log(`${dryRun ? "[DRY RUN] " : ""}✅ FIX REPORT CLOSE PRICES COMPLETE`);
+    console.log(`   Reports fixed              : ${fixed.length}`);
+    console.log(`   Skipped (no history)       : ${skippedNoHistory.length}`);
+    console.log(`   Skipped (already correct)  : ${skippedAlreadyCorrect.length}`);
+    console.log(`   Errors                     : ${errors.length}`);
+    console.log("============================================================");
+
+    return res.status(200).json({
+      data: { fixed, skippedNoHistory, skippedAlreadyCorrect, errors },
+      error: null,
+      message: `${dryRun ? "[DRY RUN] " : ""}Fixed ${fixed.length} report(s). Skipped ${skippedNoHistory.length} (missing history), ${skippedAlreadyCorrect.length} (already correct). ${errors.length} error(s).`,
+    });
+  } catch (err: any) {
+    console.error("fixReportClosePrices error:", err);
+    return res.status(500).json({ data: null, error: "Fix failed: " + err.message });
   }
 }
