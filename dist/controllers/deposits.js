@@ -73,7 +73,7 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
             const effectiveCPS = (_a = provided === null || provided === void 0 ? void 0 : provided.costPerShare) !== null && _a !== void 0 ? _a : ua.costPerShare;
             const effectiveCP = (_b = provided === null || provided === void 0 ? void 0 : provided.closePrice) !== null && _b !== void 0 ? _b : ua.asset.closePrice;
             const costPrice = (ua.allocationPercentage / 100) * topupNAV;
-            const stock = effectiveCPS > 0 ? costPrice / effectiveCPS : 0;
+            const stock = effectiveCP > 0 ? costPrice / effectiveCP : 0;
             const closeValue = effectiveCP * stock;
             const lossGain = closeValue - costPrice;
             return {
@@ -111,14 +111,17 @@ function applyTopup(tx_1, depositId_1, userPortfolioId_1, topupAmount_1) {
         }
         const newNetAssetValue = newTotalInvested;
         const assetUpdates = up.userAssets.map((ua) => {
-            var _a, _b;
-            const topupStock = (_a = topupStockByAsset.get(ua.assetId)) !== null && _a !== void 0 ? _a : 0;
-            const newStock = ((_b = ua.stock) !== null && _b !== void 0 ? _b : 0) + topupStock;
-            const costPrice = (ua.allocationPercentage / 100) * newNetAssetValue;
-            const costPerShare = ua.costPerShare;
-            const closeValue = ua.asset.closePrice * newStock;
-            const lossGain = closeValue - costPrice;
-            return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };
+            var _a, _b, _c, _d, _e;
+            const provided = assetPrices[ua.assetId];
+            const approvalClose = (_a = provided === null || provided === void 0 ? void 0 : provided.closePrice) !== null && _a !== void 0 ? _a : ((_b = ua.asset.closePrice) !== null && _b !== void 0 ? _b : 0);
+            const costPriceA = (ua.allocationPercentage / 100) * topupAmount;
+            const topupStock = approvalClose > 0 ? costPriceA / approvalClose : 0;
+            const newStock = ((_c = ua.stock) !== null && _c !== void 0 ? _c : 0) + topupStock;
+            const newCostPrice = ((_d = ua.costPrice) !== null && _d !== void 0 ? _d : 0) + costPriceA;
+            const newCostPerShare = newStock > 0 ? newCostPrice / newStock : 0;
+            const closeValue = ((_e = ua.asset.closePrice) !== null && _e !== void 0 ? _e : 0) * newStock;
+            const lossGain = closeValue - newCostPrice;
+            return { id: ua.id, stock: newStock, costPrice: newCostPrice, costPerShare: newCostPerShare, closeValue, lossGain };
         });
         yield Promise.all(assetUpdates.map((a) => tx.userPortfolioAsset.update({
             where: { id: a.id },

@@ -83,15 +83,16 @@ async function applyTopup(
   const topupNAV = topupAmount;
 
   // ─── 1. Sub-portfolio (X1) ─────────────────────────────────────────────────
-  // allocation% adopted from mother; costPerShare + closePrice entered by staff at approval;
-  // costPrice = allocationPct × topupNAV; stock = costPrice / costPerShare;
+  // allocation% adopted from mother; closePrice entered by staff at approval;
+  // costPrice (A) = allocationPct × topupNAV; stock = costPrice / closePrice;
   // closeValue = closePrice × stock; lossGain = closeValue − costPrice
   const subAssetRows = up.userAssets.map((ua) => {
     const provided      = assetPrices[ua.assetId];
     const effectiveCPS  = provided?.costPerShare ?? ua.costPerShare;
     const effectiveCP   = provided?.closePrice   ?? ua.asset.closePrice;
     const costPrice  = (ua.allocationPercentage / 100) * topupNAV;
-    const stock      = effectiveCPS > 0 ? costPrice / effectiveCPS : 0;
+    // stock = costPrice / closePrice (admin-provided close price at approval)
+    const stock      = effectiveCP > 0 ? costPrice / effectiveCP : 0;
     const closeValue = effectiveCP * stock;
     const lossGain   = closeValue - costPrice;
     return {
@@ -137,31 +138,29 @@ async function applyTopup(
   }
 
   // ─── New mother portfolio (X2 merge) ──────────────────────────────────────
-  // totalInvested  = prevTotal + topupAmount
-  // NAV            = totalInvested (no fees during allocation)
-  //
   // For each asset:
-  //   stock        = motherStock + topupStock          ← accumulated
-  //   allocation%  = same as mother                   ← unchanged
-  //   closePrice   = current market price             ← from asset table
-  //   costPrice    = allocation% × NAV
-  //   costPerShare = costPrice / stock                ← recalculated
-  //   closeValue   = closePrice × stock
-  //   lossGain     = closeValue − costPrice
+  //   costPriceA   = allocation% × topupAmount        ← new money into this asset
+  //   topupStock   = costPriceA / approvalClosePrice   ← shares bought this top-up
+  //   stock        = oldStock + topupStock             ← accumulated
+  //   allocation%  = unchanged
+  //   newCostPrice = oldCostPrice + costPriceA         ← cumulative cost basis
+  //   costPerShare = newCostPrice / newStock            ← weighted average
+  //   closeValue   = newStock × asset.closePrice        ← today's live price
+  //   lossGain     = closeValue − newCostPrice
   const newNetAssetValue = newTotalInvested;
 
-  // 2. Merge into mother portfolio — stock accumulates, everything else recalculates.
-  // costPerShare is intentionally kept at the admin-set original value — it must never change
-  // on a top-up because it represents the initial subscription price, not a rolling average.
-  // closePrice for X2 always comes from the system (asset table), NOT the approval-time price.
+  // 2. Merge into mother portfolio using cumulative cost basis formula.
   const assetUpdates = up.userAssets.map((ua) => {
-    const topupStock   = topupStockByAsset.get(ua.assetId) ?? 0;
-    const newStock     = (ua.stock ?? 0) + topupStock;
-    const costPrice    = (ua.allocationPercentage / 100) * newNetAssetValue;
-    const costPerShare = ua.costPerShare;                  // preserve original admin-set price
-    const closeValue   = ua.asset.closePrice * newStock;   // system price, not approval-time price
-    const lossGain     = closeValue - costPrice;
-    return { id: ua.id, stock: newStock, costPrice, costPerShare, closeValue, lossGain };
+    const provided        = assetPrices[ua.assetId];
+    const approvalClose   = provided?.closePrice ?? (ua.asset.closePrice ?? 0);
+    const costPriceA      = (ua.allocationPercentage / 100) * topupAmount;
+    const topupStock      = approvalClose > 0 ? costPriceA / approvalClose : 0;
+    const newStock        = (ua.stock ?? 0) + topupStock;
+    const newCostPrice    = (ua.costPrice ?? 0) + costPriceA;
+    const newCostPerShare = newStock > 0 ? newCostPrice / newStock : 0;
+    const closeValue      = (ua.asset.closePrice ?? 0) * newStock;
+    const lossGain        = closeValue - newCostPrice;
+    return { id: ua.id, stock: newStock, costPrice: newCostPrice, costPerShare: newCostPerShare, closeValue, lossGain };
   });
 
   await Promise.all(

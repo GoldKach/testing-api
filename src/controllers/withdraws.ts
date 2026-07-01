@@ -528,12 +528,11 @@ export async function approveWithdrawal(req: Request, res: Response) {
         const snapLossGain   = snapCloseValue - allocAmount;
 
         // ── X2 remaining portfolio — use SYSTEM close price, never the approval price ──
-        const newStock     = Math.max(0, Number(ua.stock) - stocksSold);
-        // costPrice is intentionally unchanged: redemption is paid from investment return,
-        // not from principal. closeValue shrinks (fewer shares) so lossGain absorbs the change.
-        const newCostPrice  = Number(ua.costPrice);
-        const newCloseValue = Number(ua.asset.closePrice) * newStock;
-        const newLossGain   = newCloseValue - newCostPrice;
+        const newStock        = Math.max(0, Number(ua.stock) - stocksSold);
+        const newCostPerShare = Number(ua.costPerShare); // unchanged on redemption
+        const newCostPrice    = newStock * newCostPerShare; // cost basis shrinks with position
+        const newCloseValue   = Number(ua.asset.closePrice) * newStock;
+        const newLossGain     = newCloseValue - newCostPrice;
 
         return {
           id:                   ua.id,
@@ -549,7 +548,7 @@ export async function approveWithdrawal(req: Request, res: Response) {
           x2: {
             stock:        newStock,
             costPrice:    newCostPrice,
-            costPerShare: Number(ua.costPerShare), // never changes on redemption
+            costPerShare: newCostPerShare,
             closeValue:   newCloseValue,
             lossGain:     newLossGain,
           },
