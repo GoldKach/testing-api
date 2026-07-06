@@ -997,24 +997,27 @@ export async function generateAllPortfoliosForDate(req: Request, res: Response) 
 
     let success = 0, failed = 0;
     const errors: string[] = [];
-    const missingPrices: Array<{ portfolioId: string; portfolioName: string; missingAssets: string[] }> = [];
 
-    for (const portfolio of allPortfolios) {
-      try {
-        const reportId = await generateAndSaveReport(portfolio.id, reportDate, true);
-        if (reportId) success++;
-        else {
+    // Process in parallel batches of 10 to avoid sequential bottleneck
+    const BATCH = 10;
+    for (let i = 0; i < allPortfolios.length; i += BATCH) {
+      const batch = allPortfolios.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map((p) => generateAndSaveReport(p.id, reportDate, false))
+      );
+      results.forEach((r, j) => {
+        const name = batch[j].customName ?? batch[j].id;
+        if (r.status === "fulfilled" && r.value) {
+          success++;
+        } else {
           failed++;
-          errors.push(`${portfolio.customName ?? portfolio.id}: Failed to generate`);
+          errors.push(`${name}: ${r.status === "rejected" ? r.reason?.message : "Failed to generate"}`);
         }
-      } catch (err: any) {
-        failed++;
-        errors.push(`${portfolio.customName ?? portfolio.id}: ${err.message}`);
-      }
+      });
     }
 
     return res.status(200).json({
-      data: { total: allPortfolios.length, success, failed, errors, missingPrices },
+      data: { total: allPortfolios.length, success, failed, errors },
       error: null,
     });
   } catch (error) {

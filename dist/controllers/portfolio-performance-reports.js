@@ -330,7 +330,6 @@ function generateDailyReportsForAllPortfolios() {
 }
 function generateAllPortfoliosForDate(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
         try {
             const { reportDate: reportDateStr } = req.body;
             if (!reportDateStr) {
@@ -345,24 +344,24 @@ function generateAllPortfoliosForDate(req, res) {
             });
             let success = 0, failed = 0;
             const errors = [];
-            const missingPrices = [];
-            for (const portfolio of allPortfolios) {
-                try {
-                    const reportId = yield generateAndSaveReport(portfolio.id, reportDate, true);
-                    if (reportId)
+            const BATCH = 10;
+            for (let i = 0; i < allPortfolios.length; i += BATCH) {
+                const batch = allPortfolios.slice(i, i + BATCH);
+                const results = yield Promise.allSettled(batch.map((p) => generateAndSaveReport(p.id, reportDate, false)));
+                results.forEach((r, j) => {
+                    var _a, _b;
+                    const name = (_a = batch[j].customName) !== null && _a !== void 0 ? _a : batch[j].id;
+                    if (r.status === "fulfilled" && r.value) {
                         success++;
+                    }
                     else {
                         failed++;
-                        errors.push(`${(_a = portfolio.customName) !== null && _a !== void 0 ? _a : portfolio.id}: Failed to generate`);
+                        errors.push(`${name}: ${r.status === "rejected" ? (_b = r.reason) === null || _b === void 0 ? void 0 : _b.message : "Failed to generate"}`);
                     }
-                }
-                catch (err) {
-                    failed++;
-                    errors.push(`${(_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id}: ${err.message}`);
-                }
+                });
             }
             return res.status(200).json({
-                data: { total: allPortfolios.length, success, failed, errors, missingPrices },
+                data: { total: allPortfolios.length, success, failed, errors },
                 error: null,
             });
         }
