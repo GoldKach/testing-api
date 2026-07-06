@@ -661,6 +661,7 @@ function getDepositFeeSummary(req, res) {
                     transactionStatus: Status.APPROVED,
                 },
                 select: {
+                    amount: true,
                     bankCost: true,
                     transactionCost: true,
                     cashAtBank: true,
@@ -668,15 +669,17 @@ function getDepositFeeSummary(req, res) {
                 },
             });
             const summary = deposits.reduce((acc, deposit) => {
-                var _a, _b, _c, _d;
+                var _a, _b, _c, _d, _e;
                 return ({
-                    totalBankCost: acc.totalBankCost + ((_a = deposit.bankCost) !== null && _a !== void 0 ? _a : 0),
-                    totalTransactionCost: acc.totalTransactionCost + ((_b = deposit.transactionCost) !== null && _b !== void 0 ? _b : 0),
-                    totalCashAtBank: acc.totalCashAtBank + ((_c = deposit.cashAtBank) !== null && _c !== void 0 ? _c : 0),
-                    totalFees: acc.totalFees + ((_d = deposit.totalFees) !== null && _d !== void 0 ? _d : 0),
+                    totalDeposited: acc.totalDeposited + ((_a = deposit.amount) !== null && _a !== void 0 ? _a : 0),
+                    totalBankCost: acc.totalBankCost + ((_b = deposit.bankCost) !== null && _b !== void 0 ? _b : 0),
+                    totalTransactionCost: acc.totalTransactionCost + ((_c = deposit.transactionCost) !== null && _c !== void 0 ? _c : 0),
+                    totalCashAtBank: acc.totalCashAtBank + ((_d = deposit.cashAtBank) !== null && _d !== void 0 ? _d : 0),
+                    totalFees: acc.totalFees + ((_e = deposit.totalFees) !== null && _e !== void 0 ? _e : 0),
                     depositCount: acc.depositCount + 1,
                 });
             }, {
+                totalDeposited: 0,
                 totalBankCost: 0,
                 totalTransactionCost: 0,
                 totalCashAtBank: 0,

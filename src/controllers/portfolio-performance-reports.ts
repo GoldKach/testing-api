@@ -690,21 +690,26 @@ async function generatePortfolioReport(
     reportDateUTC.setUTCHours(0, 0, 0, 0);
     const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
 
-    const historicalPriceMap = new Map<string, number>(); // assetId → close price for reportDate
+    const historicalPriceMap = new Map<string, number>(); // assetId → closest price on or before reportDate
     const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
     if (assetIds.length > 0) {
+      // Fetch all history rows on or before reportDate, newest first.
+      // The first row per asset is the most recent price on or before the report date.
       const historyRows = await db.assetPriceHistory.findMany({
         where: {
           assetId:   { in: assetIds },
-          priceDate: reportDateUTC,   // exact date match only
+          priceDate: { lte: reportDateUTC },
         },
+        orderBy: { priceDate: "desc" },
       });
       for (const row of historyRows) {
-        historicalPriceMap.set(row.assetId, Number(row.closePrice));
+        if (!historicalPriceMap.has(row.assetId)) {
+          historicalPriceMap.set(row.assetId, Number(row.closePrice));
+        }
       }
     }
 
-    // In strict mode, all assets must have a history price for this exact date
+    // In strict mode, fail only if an asset has NO price history at all
     const missingAssets = userPortfolio.userAssets
       .filter((ua) => !historicalPriceMap.has(ua.assetId))
       .map((ua) => ({ assetId: ua.assetId, symbol: ua.asset.symbol ?? ua.assetId }));
@@ -996,7 +1001,6 @@ export async function generateAllPortfoliosForDate(req: Request, res: Response) 
 
     for (const portfolio of allPortfolios) {
       try {
-        // generateAndSaveReport deletes the existing report then recreates it
         const reportId = await generateAndSaveReport(portfolio.id, reportDate, true);
         if (reportId) success++;
         else {
@@ -1005,16 +1009,7 @@ export async function generateAllPortfoliosForDate(req: Request, res: Response) 
         }
       } catch (err: any) {
         failed++;
-        if (err instanceof MissingHistoryPricesError) {
-          missingPrices.push({
-            portfolioId:   portfolio.id,
-            portfolioName: portfolio.customName ?? portfolio.id,
-            missingAssets: err.missingAssets.map((a) => a.symbol),
-          });
-          errors.push(`${portfolio.customName ?? portfolio.id}: Missing close prices for [${err.missingAssets.map((a) => a.symbol).join(", ")}] on ${reportDateStr}`);
-        } else {
-          errors.push(`${portfolio.customName ?? portfolio.id}: ${err.message}`);
-        }
+        errors.push(`${portfolio.customName ?? portfolio.id}: ${err.message}`);
       }
     }
 

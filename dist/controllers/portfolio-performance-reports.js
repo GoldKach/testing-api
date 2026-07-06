@@ -96,11 +96,14 @@ function generatePortfolioReport(userPortfolioId_1) {
                 const historyRows = yield db_1.db.assetPriceHistory.findMany({
                     where: {
                         assetId: { in: assetIds },
-                        priceDate: reportDateUTC,
+                        priceDate: { lte: reportDateUTC },
                     },
+                    orderBy: { priceDate: "desc" },
                 });
                 for (const row of historyRows) {
-                    historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                    if (!historicalPriceMap.has(row.assetId)) {
+                        historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                    }
                 }
             }
             const missingAssets = userPortfolio.userAssets
@@ -327,7 +330,7 @@ function generateDailyReportsForAllPortfolios() {
 }
 function generateAllPortfoliosForDate(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _e;
+        var _a, _b;
         try {
             const { reportDate: reportDateStr } = req.body;
             if (!reportDateStr) {
@@ -355,17 +358,7 @@ function generateAllPortfoliosForDate(req, res) {
                 }
                 catch (err) {
                     failed++;
-                    if (err instanceof report_errors_1.MissingHistoryPricesError) {
-                        missingPrices.push({
-                            portfolioId: portfolio.id,
-                            portfolioName: (_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id,
-                            missingAssets: err.missingAssets.map((a) => a.symbol),
-                        });
-                        errors.push(`${(_c = portfolio.customName) !== null && _c !== void 0 ? _c : portfolio.id}: Missing close prices for [${err.missingAssets.map((a) => a.symbol).join(", ")}] on ${reportDateStr}`);
-                    }
-                    else {
-                        errors.push(`${(_e = portfolio.customName) !== null && _e !== void 0 ? _e : portfolio.id}: ${err.message}`);
-                    }
+                    errors.push(`${(_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id}: ${err.message}`);
                 }
             }
             return res.status(200).json({

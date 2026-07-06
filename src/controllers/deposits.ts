@@ -824,6 +824,7 @@ export async function getDepositFeeSummary(req: Request, res: Response) {
         transactionStatus: Status.APPROVED,
       },
       select: {
+        amount: true,
         bankCost: true,
         transactionCost: true,
         cashAtBank: true,
@@ -833,6 +834,7 @@ export async function getDepositFeeSummary(req: Request, res: Response) {
 
     const summary = deposits.reduce(
       (acc, deposit) => ({
+        totalDeposited: acc.totalDeposited + (deposit.amount ?? 0),
         totalBankCost: acc.totalBankCost + (deposit.bankCost ?? 0),
         totalTransactionCost: acc.totalTransactionCost + (deposit.transactionCost ?? 0),
         totalCashAtBank: acc.totalCashAtBank + (deposit.cashAtBank ?? 0),
@@ -840,6 +842,7 @@ export async function getDepositFeeSummary(req: Request, res: Response) {
         depositCount: acc.depositCount + 1,
       }),
       {
+        totalDeposited: 0,
         totalBankCost: 0,
         totalTransactionCost: 0,
         totalCashAtBank: 0,

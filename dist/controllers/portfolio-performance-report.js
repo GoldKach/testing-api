@@ -82,25 +82,21 @@ function generatePortfolioReport(userPortfolioId_1) {
             }
             const reportDateUTC = new Date(reportDate);
             reportDateUTC.setUTCHours(0, 0, 0, 0);
-            const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
             const historicalPriceMap = new Map();
             const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
             if (assetIds.length > 0) {
                 const historyRows = yield db_1.db.assetPriceHistory.findMany({
                     where: {
                         assetId: { in: assetIds },
-                        priceDate: reportDateUTC,
+                        priceDate: { lte: reportDateUTC },
                     },
+                    orderBy: { priceDate: "desc" },
                 });
                 for (const row of historyRows) {
-                    historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                    if (!historicalPriceMap.has(row.assetId)) {
+                        historicalPriceMap.set(row.assetId, Number(row.closePrice));
+                    }
                 }
-            }
-            const missingAssets = userPortfolio.userAssets
-                .filter((ua) => !historicalPriceMap.has(ua.assetId))
-                .map((ua) => { var _a; return ({ assetId: ua.assetId, symbol: (_a = ua.asset.symbol) !== null && _a !== void 0 ? _a : ua.assetId }); });
-            if (missingAssets.length > 0) {
-                throw new report_errors_1.MissingHistoryPricesError(missingAssets, reportDateStr);
             }
             let totalCostPrice = 0;
             let totalCloseValue = 0;

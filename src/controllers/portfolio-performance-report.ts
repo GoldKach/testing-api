@@ -133,10 +133,11 @@ async function generatePortfolioReport(
       };
     }
 
-    // ── Resolve close prices from AssetPriceHistory (exact date match) ──
+    // ── Resolve close prices from AssetPriceHistory ──────────────────
+    // Use the most recent price on or before the report date so that
+    // back-dated reports work even when prices aren't stored for every day.
     const reportDateUTC = new Date(reportDate);
     reportDateUTC.setUTCHours(0, 0, 0, 0);
-    const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
 
     const historicalPriceMap = new Map<string, number>();
     const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
@@ -144,20 +145,15 @@ async function generatePortfolioReport(
       const historyRows = await db.assetPriceHistory.findMany({
         where: {
           assetId:   { in: assetIds },
-          priceDate: reportDateUTC,   // exact date only
+          priceDate: { lte: reportDateUTC },
         },
+        orderBy: { priceDate: "desc" },
       });
       for (const row of historyRows) {
-        historicalPriceMap.set(row.assetId, Number(row.closePrice));
+        if (!historicalPriceMap.has(row.assetId)) {
+          historicalPriceMap.set(row.assetId, Number(row.closePrice));
+        }
       }
-    }
-
-    // Throw if any asset is missing a history price for this exact date
-    const missingAssets = userPortfolio.userAssets
-      .filter((ua) => !historicalPriceMap.has(ua.assetId))
-      .map((ua) => ({ assetId: ua.assetId, symbol: ua.asset.symbol ?? ua.assetId }));
-    if (missingAssets.length > 0) {
-      throw new MissingHistoryPricesError(missingAssets, reportDateStr);
     }
 
     // ── Compute totals ───────────────────────────────────────────────
