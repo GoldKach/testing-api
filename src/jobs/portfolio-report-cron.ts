@@ -159,20 +159,20 @@ export async function snapshotLivePricesForToday() {
 }
 
 /**
- * PRODUCTION — once per day at 14:00 EAT (11:00 UTC).
+ * PRODUCTION — once per day at 11:00 AM EAT (08:00 UTC).
  * Step 1: snapshot all live close prices for today into AssetPriceHistory.
  * Step 2: generate portfolio performance reports (which read from AssetPriceHistory).
- * This ensures reports always use the 2 PM EAT price, and looking up today's
- * date in the future returns exactly what the price was at report generation time.
+ * Running at 11 AM EAT ensures the admin has had time to enter the correct
+ * close prices before reports are generated, avoiding stale midnight prices.
  */
 export function scheduleDailyPortfolioReports() {
   console.log("============================================================");
   console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-  console.log("⏰ Snapshot + reports every day at 14:00 EAT (11:00 UTC)");
+  console.log("⏰ Snapshot + reports every day at 11:00 AM EAT (08:00 UTC)");
   console.log("============================================================");
-  cron.schedule("0 11 * * *", async () => {
+  cron.schedule("0 8 * * *", async () => {
     console.log("============================================================");
-    console.log("📸 Step 1 — Snapshotting live prices for today (2 PM EAT)");
+    console.log("📸 Step 1 — Snapshotting live prices for today (11 AM EAT)");
     console.log("============================================================");
     await snapshotLivePricesForToday();
     await executePortfolioReportJob("DAILY");
@@ -233,6 +233,11 @@ export function scheduleEATMidnightPriceSnapshot() {
 /**
  * Choose schedule based on CRON_MODE env variable.
  * CRON_MODE=daily | 30-minute | 10-minute | 5-minute | 2-minute | 1-minute | 30-second
+ *
+ * Note: the midnight EAT price snapshot (scheduleEATMidnightPriceSnapshot) is NOT
+ * started here. It was writing stale previous-day prices under today's date at
+ * midnight before the admin had a chance to update close prices. The 11 AM EAT
+ * daily job (scheduleDailyPortfolioReports) snapshots prices at the right time.
  */
 export function startPortfolioReportCronFromEnv() {
   if (process.env.NODE_ENV === "test") {

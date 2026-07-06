@@ -149,11 +149,11 @@ function snapshotLivePricesForToday() {
 function scheduleDailyPortfolioReports() {
     console.log("============================================================");
     console.log("📅 DAILY PORTFOLIO REPORT SCHEDULER INITIALIZED");
-    console.log("⏰ Snapshot + reports every day at 14:00 EAT (11:00 UTC)");
+    console.log("⏰ Snapshot + reports every day at 11:00 AM EAT (08:00 UTC)");
     console.log("============================================================");
-    node_cron_1.default.schedule("0 11 * * *", () => __awaiter(this, void 0, void 0, function* () {
+    node_cron_1.default.schedule("0 8 * * *", () => __awaiter(this, void 0, void 0, function* () {
         console.log("============================================================");
-        console.log("📸 Step 1 — Snapshotting live prices for today (2 PM EAT)");
+        console.log("📸 Step 1 — Snapshotting live prices for today (11 AM EAT)");
         console.log("============================================================");
         yield snapshotLivePricesForToday();
         yield executePortfolioReportJob("DAILY");
