@@ -211,6 +211,14 @@ export async function submitCompanyOnboarding(req: Request, res: Response) {
       timeHorizon: payload.timeHorizon ? String(payload.timeHorizon) : null,
       riskTolerance: payload.riskTolerance ? String(payload.riskTolerance) : null,
       investmentExperience: payload.investmentExperience ? String(payload.investmentExperience) : null,
+      riskQuestionnaire: payload.riskQuestionnaire ?? null,
+      riskScore: payload.riskScore != null ? Number(payload.riskScore) : null,
+      riskProfile: payload.riskProfile ? String(payload.riskProfile) : null,
+      suggestedStrategy: payload.suggestedStrategy ? String(payload.suggestedStrategy) : null,
+      advisorOverride: null,
+      advisorOverrideProfile: null,
+      advisorOverrideReason: null,
+      consentConfirmed: true,
       sourceOfIncome: payload.sourceOfIncome ? String(payload.sourceOfIncome) : null,
       expectedInvestment: payload.expectedInvestment ? String(payload.expectedInvestment) : null,
 
@@ -584,10 +592,24 @@ export async function updateCompanyOnboarding(req: Request, res: Response) {
       "companyName", "email", "companyAddress", "businessType",
       "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
       "investmentExperience", "sourceOfIncome", "expectedInvestment",
-      "sanctionsOrLegal"
+      "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
     ];
 
-    const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms"];
+    if (payload.riskQuestionnaire !== undefined) {
+      (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
+    }
+    if (payload.riskScore != null) {
+      (updateData as any).riskScore = Number(payload.riskScore);
+    }
+    if (payload.advisorOverride !== undefined) {
+      (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+        ? true
+        : payload.advisorOverride === false || payload.advisorOverride === "false"
+        ? false
+        : null;
+    }
+
+    const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
 
     const dateFields = ["incorporationDate"];
 

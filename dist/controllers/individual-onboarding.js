@@ -42,7 +42,7 @@ function parseBeneficiaryRelation(v) {
 }
 function submitIndividualOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         try {
             const userId = getUserId(req);
             if (!userId)
@@ -56,10 +56,6 @@ function submitIndividualOnboarding(req, res) {
                 "phoneNumber",
                 "employmentStatus",
                 "occupation",
-                "primaryGoal",
-                "timeHorizon",
-                "riskTolerance",
-                "investmentExperience",
                 "sourceOfIncome",
                 "employmentIncome",
                 "expectedInvestment",
@@ -78,12 +74,6 @@ function submitIndividualOnboarding(req, res) {
                 if (!/^\d{10}$/.test(String(payload.tin))) {
                     return res.status(400).json({ error: "TIN must be exactly 10 digits." });
                 }
-                const conflict = yield db_1.db.individualOnboarding.findFirst({
-                    where: { tin: String(payload.tin), NOT: { userId } },
-                    select: { id: true },
-                });
-                if (conflict)
-                    return res.status(409).json({ error: "TIN is already in use." });
             }
             const rawBeneficiaries = Array.isArray(payload.beneficiaries) ? payload.beneficiaries : [];
             if (rawBeneficiaries.length === 0) {
@@ -130,25 +120,33 @@ function submitIndividualOnboarding(req, res) {
                 occupation: String(payload.occupation),
                 companyName: (_d = payload.companyName) !== null && _d !== void 0 ? _d : null,
                 hasBusiness: (_e = payload.hasBusiness) !== null && _e !== void 0 ? _e : null,
-                primaryGoal: String(payload.primaryGoal),
-                timeHorizon: String(payload.timeHorizon),
-                riskTolerance: String(payload.riskTolerance),
-                investmentExperience: String(payload.investmentExperience),
+                primaryGoal: payload.primaryGoal ? String(payload.primaryGoal) : null,
+                timeHorizon: payload.timeHorizon ? String(payload.timeHorizon) : null,
+                riskTolerance: payload.riskTolerance ? String(payload.riskTolerance) : null,
+                investmentExperience: payload.investmentExperience ? String(payload.investmentExperience) : null,
+                riskQuestionnaire: (_f = payload.riskQuestionnaire) !== null && _f !== void 0 ? _f : null,
+                riskScore: payload.riskScore != null ? Number(payload.riskScore) : null,
+                riskProfile: payload.riskProfile ? String(payload.riskProfile) : null,
+                suggestedStrategy: payload.suggestedStrategy ? String(payload.suggestedStrategy) : null,
+                advisorOverride: null,
+                advisorOverrideProfile: null,
+                advisorOverrideReason: null,
+                consentConfirmed: true,
                 sourceOfIncome: String(payload.sourceOfIncome),
                 employmentIncome: String(payload.employmentIncome),
                 expectedInvestment: String(payload.expectedInvestment),
-                businessOwnership: (_f = payload.businessOwnership) !== null && _f !== void 0 ? _f : null,
+                businessOwnership: (_g = payload.businessOwnership) !== null && _g !== void 0 ? _g : null,
                 isPEP: payload.isPEP ? String(payload.isPEP) : null,
-                publicPosition: (_g = payload.publicPosition) !== null && _g !== void 0 ? _g : null,
-                relationshipToCountry: (_h = payload.relationshipToCountry) !== null && _h !== void 0 ? _h : null,
-                familyMemberDetails: (_j = payload.familyMemberDetails) !== null && _j !== void 0 ? _j : null,
+                publicPosition: (_h = payload.publicPosition) !== null && _h !== void 0 ? _h : null,
+                relationshipToCountry: (_j = payload.relationshipToCountry) !== null && _j !== void 0 ? _j : null,
+                familyMemberDetails: (_k = payload.familyMemberDetails) !== null && _k !== void 0 ? _k : null,
                 sanctionsOrLegal: sanctionsOrLegal || null,
                 consentToDataCollection: !!payload.consentToDataCollection,
                 agreeToTerms: !!payload.agreeToTerms,
                 nationalIdUrl: String(payload.nationalIdUrl),
-                passportPhotoUrl: (_k = payload.passportPhotoUrl) !== null && _k !== void 0 ? _k : null,
-                tinCertificateUrl: (_l = payload.tinCertificateUrl) !== null && _l !== void 0 ? _l : null,
-                bankStatementUrl: (_m = payload.bankStatementUrl) !== null && _m !== void 0 ? _m : null,
+                passportPhotoUrl: (_l = payload.passportPhotoUrl) !== null && _l !== void 0 ? _l : null,
+                tinCertificateUrl: (_m = payload.tinCertificateUrl) !== null && _m !== void 0 ? _m : null,
+                bankStatementUrl: (_o = payload.bankStatementUrl) !== null && _o !== void 0 ? _o : null,
                 isApproved: false,
             };
             const saved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
@@ -339,9 +337,23 @@ function updateIndividualOnboarding(req, res) {
                 "countryOfResidence", "employmentStatus", "occupation", "companyName",
                 "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
                 "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
-                "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal"
+                "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
+                "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
             ];
-            const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms"];
+            if (payload.riskQuestionnaire !== undefined) {
+                updateData.riskQuestionnaire = payload.riskQuestionnaire;
+            }
+            if (payload.riskScore != null) {
+                updateData.riskScore = Number(payload.riskScore);
+            }
+            if (payload.advisorOverride !== undefined) {
+                updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+                    ? true
+                    : payload.advisorOverride === false || payload.advisorOverride === "false"
+                        ? false
+                        : null;
+            }
+            const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
             const dateFields = ["dateOfBirth", "incorporationDate"];
             const documentFields = [
                 "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",

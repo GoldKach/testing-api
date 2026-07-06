@@ -119,12 +119,6 @@ function submitIndividualOnboarding(req, res) {
                 if (!/^\d{10}$/.test(String(payload.tin))) {
                     return res.status(400).json({ error: "TIN must be exactly 10 digits." });
                 }
-                const conflict = yield db_1.db.individualOnboarding.findFirst({
-                    where: { tin: String(payload.tin), NOT: { userId } },
-                    select: { id: true },
-                });
-                if (conflict)
-                    return res.status(409).json({ error: "TIN is already in use." });
             }
             const rawBeneficiaries = Array.isArray(payload.beneficiaries)
                 ? payload.beneficiaries

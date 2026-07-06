@@ -57,7 +57,7 @@ function parseOwnershipType(v) {
 }
 function submitCompanyOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
         try {
             const userId = getUserId(req);
             if (!userId)
@@ -163,24 +163,32 @@ function submitCompanyOnboarding(req, res) {
                 timeHorizon: payload.timeHorizon ? String(payload.timeHorizon) : null,
                 riskTolerance: payload.riskTolerance ? String(payload.riskTolerance) : null,
                 investmentExperience: payload.investmentExperience ? String(payload.investmentExperience) : null,
+                riskQuestionnaire: (_c = payload.riskQuestionnaire) !== null && _c !== void 0 ? _c : null,
+                riskScore: payload.riskScore != null ? Number(payload.riskScore) : null,
+                riskProfile: payload.riskProfile ? String(payload.riskProfile) : null,
+                suggestedStrategy: payload.suggestedStrategy ? String(payload.suggestedStrategy) : null,
+                advisorOverride: null,
+                advisorOverrideProfile: null,
+                advisorOverrideReason: null,
+                consentConfirmed: true,
                 sourceOfIncome: payload.sourceOfIncome ? String(payload.sourceOfIncome) : null,
                 expectedInvestment: payload.expectedInvestment ? String(payload.expectedInvestment) : null,
                 isPEP: payload.isPEP ? String(payload.isPEP) : null,
                 sanctionsOrLegal: sanctionsOrLegal || null,
                 consentToDataCollection: !!payload.consentToDataCollection,
                 agreeToTerms: !!payload.agreeToTerms,
-                constitutionUrl: (_c = payload.constitutionUrl) !== null && _c !== void 0 ? _c : null,
-                tradingLicenseUrl: (_d = payload.tradingLicenseUrl) !== null && _d !== void 0 ? _d : null,
+                constitutionUrl: (_d = payload.constitutionUrl) !== null && _d !== void 0 ? _d : null,
+                tradingLicenseUrl: (_e = payload.tradingLicenseUrl) !== null && _e !== void 0 ? _e : null,
                 bankStatementUrl: String(payload.bankStatementUrl),
-                tinCertificateUrl: (_e = payload.tinCertificateUrl) !== null && _e !== void 0 ? _e : null,
-                logoDocUrl: (_f = payload.logoDocUrl) !== null && _f !== void 0 ? _f : null,
-                formA1Url: (_g = payload.formA1Url) !== null && _g !== void 0 ? _g : null,
-                formS18Url: (_h = payload.formS18Url) !== null && _h !== void 0 ? _h : null,
-                form18Url: (_j = payload.form18Url) !== null && _j !== void 0 ? _j : null,
-                form20Url: (_k = payload.form20Url) !== null && _k !== void 0 ? _k : null,
-                beneficialOwnershipFormUrl: (_l = payload.beneficialOwnershipFormUrl) !== null && _l !== void 0 ? _l : null,
-                memorandumArticlesUrl: (_m = payload.memorandumArticlesUrl) !== null && _m !== void 0 ? _m : null,
-                officialAccountUrl: (_o = payload.officialAccountUrl) !== null && _o !== void 0 ? _o : null,
+                tinCertificateUrl: (_f = payload.tinCertificateUrl) !== null && _f !== void 0 ? _f : null,
+                logoDocUrl: (_g = payload.logoDocUrl) !== null && _g !== void 0 ? _g : null,
+                formA1Url: (_h = payload.formA1Url) !== null && _h !== void 0 ? _h : null,
+                formS18Url: (_j = payload.formS18Url) !== null && _j !== void 0 ? _j : null,
+                form18Url: (_k = payload.form18Url) !== null && _k !== void 0 ? _k : null,
+                form20Url: (_l = payload.form20Url) !== null && _l !== void 0 ? _l : null,
+                beneficialOwnershipFormUrl: (_m = payload.beneficialOwnershipFormUrl) !== null && _m !== void 0 ? _m : null,
+                memorandumArticlesUrl: (_o = payload.memorandumArticlesUrl) !== null && _o !== void 0 ? _o : null,
+                officialAccountUrl: (_p = payload.officialAccountUrl) !== null && _p !== void 0 ? _p : null,
                 isApproved: false,
             };
             const saved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
@@ -506,9 +514,22 @@ function updateCompanyOnboarding(req, res) {
                 "companyName", "email", "companyAddress", "businessType",
                 "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
                 "investmentExperience", "sourceOfIncome", "expectedInvestment",
-                "sanctionsOrLegal"
+                "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
             ];
-            const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms"];
+            if (payload.riskQuestionnaire !== undefined) {
+                updateData.riskQuestionnaire = payload.riskQuestionnaire;
+            }
+            if (payload.riskScore != null) {
+                updateData.riskScore = Number(payload.riskScore);
+            }
+            if (payload.advisorOverride !== undefined) {
+                updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+                    ? true
+                    : payload.advisorOverride === false || payload.advisorOverride === "false"
+                        ? false
+                        : null;
+            }
+            const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
             const dateFields = ["incorporationDate"];
             const documentFields = [
                 "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",

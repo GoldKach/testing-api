@@ -941,7 +941,7 @@ model IndividualOnboarding {
   // Personal info
   fullName         String?
   dateOfBirth      DateTime?
-  tin              String?   @unique  // Optional for individuals
+  tin              String?
   avatarUrl        String?
   homeAddress      String?
   email            String?
@@ -960,6 +960,16 @@ model IndividualOnboarding {
   employmentIncome     String?
   expectedInvestment   String?
   businessOwnership    String?
+
+  // Risk questionnaire
+  riskQuestionnaire      Json?
+  riskScore              Int?
+  riskProfile            String?
+  suggestedStrategy      String?
+  advisorOverride        Boolean?
+  advisorOverrideProfile String?
+  advisorOverrideReason  String?
+  consentConfirmed       Boolean  @default(false)
 
   // PEP
   isPEP                   String?
@@ -1071,6 +1081,16 @@ model CompanyOnboarding {
   investmentExperience String?
   sourceOfIncome       String?
   expectedInvestment   String?
+
+  // Risk questionnaire
+  riskQuestionnaire      Json?
+  riskScore              Int?
+  riskProfile            String?
+  suggestedStrategy      String?
+  advisorOverride        Boolean?
+  advisorOverrideProfile String?
+  advisorOverrideReason  String?
+  consentConfirmed       Boolean  @default(false)
 
   // PEP / Legal
   isPEP                   String?

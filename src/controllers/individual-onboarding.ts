@@ -68,10 +68,6 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       "phoneNumber",
       "employmentStatus",
       "occupation",
-      "primaryGoal",
-      "timeHorizon",
-      "riskTolerance",
-      "investmentExperience",
       "sourceOfIncome",
       "employmentIncome",
       "expectedInvestment",
@@ -91,16 +87,11 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       return res.status(400).json({ error: "National ID / Passport upload is required." });
     }
 
-    // --- TIN validation (optional field, but must be 10 digits if provided) ---
+    // --- TIN validation (optional; format check only if provided) ---
     if (payload.tin) {
       if (!/^\d{10}$/.test(String(payload.tin))) {
         return res.status(400).json({ error: "TIN must be exactly 10 digits." });
       }
-      const conflict = await db.individualOnboarding.findFirst({
-        where: { tin: String(payload.tin), NOT: { userId } },
-        select: { id: true },
-      });
-      if (conflict) return res.status(409).json({ error: "TIN is already in use." });
     }
 
     // --- Beneficiaries validation (at least 1) ---
@@ -156,10 +147,18 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       companyName: payload.companyName ?? null,
       hasBusiness: payload.hasBusiness ?? null,
 
-      primaryGoal: String(payload.primaryGoal),
-      timeHorizon: String(payload.timeHorizon),
-      riskTolerance: String(payload.riskTolerance),
-      investmentExperience: String(payload.investmentExperience),
+      primaryGoal: payload.primaryGoal ? String(payload.primaryGoal) : null,
+      timeHorizon: payload.timeHorizon ? String(payload.timeHorizon) : null,
+      riskTolerance: payload.riskTolerance ? String(payload.riskTolerance) : null,
+      investmentExperience: payload.investmentExperience ? String(payload.investmentExperience) : null,
+      riskQuestionnaire: payload.riskQuestionnaire ?? null,
+      riskScore: payload.riskScore != null ? Number(payload.riskScore) : null,
+      riskProfile: payload.riskProfile ? String(payload.riskProfile) : null,
+      suggestedStrategy: payload.suggestedStrategy ? String(payload.suggestedStrategy) : null,
+      advisorOverride: null,
+      advisorOverrideProfile: null,
+      advisorOverrideReason: null,
+      consentConfirmed: true,
       sourceOfIncome: String(payload.sourceOfIncome),
       employmentIncome: String(payload.employmentIncome),
       expectedInvestment: String(payload.expectedInvestment),
@@ -391,10 +390,25 @@ export async function updateIndividualOnboarding(req: Request, res: Response) {
       "countryOfResidence", "employmentStatus", "occupation", "companyName",
       "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
       "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
-      "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal"
+      "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
+      "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
     ];
 
-    const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms"];
+    if (payload.riskQuestionnaire !== undefined) {
+      (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
+    }
+    if (payload.riskScore != null) {
+      (updateData as any).riskScore = Number(payload.riskScore);
+    }
+    if (payload.advisorOverride !== undefined) {
+      (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+        ? true
+        : payload.advisorOverride === false || payload.advisorOverride === "false"
+        ? false
+        : null;
+    }
+
+    const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
 
     const dateFields = ["dateOfBirth", "incorporationDate"];
 

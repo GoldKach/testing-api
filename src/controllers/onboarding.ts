@@ -119,16 +119,11 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
         .json({ error: "National ID / Passport upload is required." });
     }
 
-    // TIN — optional but validated if provided
+    // TIN — optional; format check only if provided
     if (payload.tin) {
       if (!/^\d{10}$/.test(String(payload.tin))) {
         return res.status(400).json({ error: "TIN must be exactly 10 digits." });
       }
-      const conflict = await db.individualOnboarding.findFirst({
-        where: { tin: String(payload.tin), NOT: { userId } },
-        select: { id: true },
-      });
-      if (conflict) return res.status(409).json({ error: "TIN is already in use." });
     }
 
     // Beneficiaries — at least 1
