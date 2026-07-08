@@ -531,6 +531,15 @@ export async function getUserById(req: Request, res: Response) {
             ubos: true,
           },
         },
+        // Signature record for agreement regeneration
+        signature: {
+          select: {
+            signatureType: true,
+            imageUrl: true,
+            typedName: true,
+            signedAt: true,
+          },
+        },
       },
     });
 
@@ -539,6 +548,30 @@ export async function getUserById(req: Request, res: Response) {
   } catch (error) {
     console.error("Error fetching user by id:", error);
     return res.status(500).json({ data: null, error: "Server error" });
+  }
+}
+
+/* ============================
+   PATCH SIGNED AGREEMENT URL
+============================= */
+export async function updateSignedAgreementUrl(req: Request, res: Response) {
+  const { id } = req.params;
+  const { signedAgreementUrl } = req.body as { signedAgreementUrl?: string };
+  if (!signedAgreementUrl) {
+    return res.status(400).json({ error: "signedAgreementUrl is required" });
+  }
+  try {
+    const updated = await db.individualOnboarding.updateMany({
+      where: { userId: id },
+      data: { signedAgreementUrl },
+    });
+    if (updated.count === 0) {
+      return res.status(404).json({ error: "No individual onboarding found for this user" });
+    }
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("updateSignedAgreementUrl error:", error);
+    return res.status(500).json({ error: "Failed to update signed agreement URL" });
   }
 }
 

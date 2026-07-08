@@ -1,0 +1,6 @@
+-- Add ONBOARDING_OFFICER to UserRole enum (idempotent)
+DO $$ BEGIN
+  ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'ONBOARDING_OFFICER';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;

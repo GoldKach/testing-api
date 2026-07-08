@@ -87,6 +87,22 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       return res.status(400).json({ error: "National ID / Passport upload is required." });
     }
 
+    // --- Signature validation ---
+    const sigType = String(payload.signatureType || "").toUpperCase();
+    const VALID_SIG_TYPES = ["DRAWN", "UPLOADED", "TYPED"];
+    if (!sigType || !VALID_SIG_TYPES.includes(sigType)) {
+      return res.status(400).json({ error: "A valid signature is required to complete onboarding." });
+    }
+    if ((sigType === "DRAWN" || sigType === "UPLOADED") && !payload.signatureImageUrl) {
+      return res.status(400).json({ error: "Signature image URL is required for drawn/uploaded signature." });
+    }
+    if (sigType === "TYPED") {
+      const typedName = String(payload.signatureTypedName || "").trim();
+      if (typedName.length < 3) {
+        return res.status(400).json({ error: "Typed signature must be at least 3 characters." });
+      }
+    }
+
     // --- TIN validation (optional; format check only if provided) ---
     if (payload.tin) {
       if (!/^\d{10}$/.test(String(payload.tin))) {
@@ -135,6 +151,7 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       userId,
       agentId: resolvedAgentId,
 
+      title: payload.title ? String(payload.title).trim() : null,
       fullName: String(payload.fullName),
       dateOfBirth: parseDate(payload.dateOfBirth) ?? undefined,
       tin: payload.tin ? String(payload.tin).trim() : null,
@@ -177,6 +194,7 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
       passportPhotoUrl: payload.passportPhotoUrl ?? null,
       tinCertificateUrl: payload.tinCertificateUrl ?? null,
       bankStatementUrl: payload.bankStatementUrl ?? null,
+      signedAgreementUrl: payload.signedAgreementUrl ? String(payload.signedAgreementUrl) : null,
 
       isApproved: false,
     };
@@ -222,6 +240,27 @@ export async function submitIndividualOnboarding(req: Request, res: Response) {
           })),
         });
       }
+
+      // Upsert signature record
+      await tx.signature.upsert({
+        where: { userId },
+        update: {
+          signatureType: sigType as any,
+          imageUrl: sigType !== "TYPED" ? String(payload.signatureImageUrl) : null,
+          typedName: sigType === "TYPED" ? String(payload.signatureTypedName || "").trim() : null,
+          signedAt: new Date(),
+          ipAddress: req.ip ?? null,
+          userAgent: req.headers?.["user-agent"] ?? null,
+        },
+        create: {
+          userId,
+          signatureType: sigType as any,
+          imageUrl: sigType !== "TYPED" ? String(payload.signatureImageUrl) : null,
+          typedName: sigType === "TYPED" ? String(payload.signatureTypedName || "").trim() : null,
+          ipAddress: req.ip ?? null,
+          userAgent: req.headers?.["user-agent"] ?? null,
+        },
+      });
 
       // Create or update agent-client assignment when agent selected
       if (resolvedAgentId) {

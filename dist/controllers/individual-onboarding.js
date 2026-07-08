@@ -70,6 +70,20 @@ function submitIndividualOnboarding(req, res) {
             if (!payload.nationalIdUrl) {
                 return res.status(400).json({ error: "National ID / Passport upload is required." });
             }
+            const sigType = String(payload.signatureType || "").toUpperCase();
+            const VALID_SIG_TYPES = ["DRAWN", "UPLOADED", "TYPED"];
+            if (!sigType || !VALID_SIG_TYPES.includes(sigType)) {
+                return res.status(400).json({ error: "A valid signature is required to complete onboarding." });
+            }
+            if ((sigType === "DRAWN" || sigType === "UPLOADED") && !payload.signatureImageUrl) {
+                return res.status(400).json({ error: "Signature image URL is required for drawn/uploaded signature." });
+            }
+            if (sigType === "TYPED") {
+                const typedName = String(payload.signatureTypedName || "").trim();
+                if (typedName.length < 3) {
+                    return res.status(400).json({ error: "Typed signature must be at least 3 characters." });
+                }
+            }
             if (payload.tin) {
                 if (!/^\d{10}$/.test(String(payload.tin))) {
                     return res.status(400).json({ error: "TIN must be exactly 10 digits." });
@@ -109,6 +123,7 @@ function submitIndividualOnboarding(req, res) {
             const onboardingData = {
                 userId,
                 agentId: resolvedAgentId,
+                title: payload.title ? String(payload.title).trim() : null,
                 fullName: String(payload.fullName),
                 dateOfBirth: (_b = parseDate(payload.dateOfBirth)) !== null && _b !== void 0 ? _b : undefined,
                 tin: payload.tin ? String(payload.tin).trim() : null,
@@ -147,9 +162,11 @@ function submitIndividualOnboarding(req, res) {
                 passportPhotoUrl: (_l = payload.passportPhotoUrl) !== null && _l !== void 0 ? _l : null,
                 tinCertificateUrl: (_m = payload.tinCertificateUrl) !== null && _m !== void 0 ? _m : null,
                 bankStatementUrl: (_o = payload.bankStatementUrl) !== null && _o !== void 0 ? _o : null,
+                signedAgreementUrl: payload.signedAgreementUrl ? String(payload.signedAgreementUrl) : null,
                 isApproved: false,
             };
             const saved = yield db_1.db.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+                var _a, _b, _c, _d, _e, _f;
                 const record = yield tx.individualOnboarding.upsert({
                     where: { userId },
                     update: onboardingData,
@@ -191,6 +208,25 @@ function submitIndividualOnboarding(req, res) {
                         }),
                     });
                 }
+                yield tx.signature.upsert({
+                    where: { userId },
+                    update: {
+                        signatureType: sigType,
+                        imageUrl: sigType !== "TYPED" ? String(payload.signatureImageUrl) : null,
+                        typedName: sigType === "TYPED" ? String(payload.signatureTypedName || "").trim() : null,
+                        signedAt: new Date(),
+                        ipAddress: (_a = req.ip) !== null && _a !== void 0 ? _a : null,
+                        userAgent: (_c = (_b = req.headers) === null || _b === void 0 ? void 0 : _b["user-agent"]) !== null && _c !== void 0 ? _c : null,
+                    },
+                    create: {
+                        userId,
+                        signatureType: sigType,
+                        imageUrl: sigType !== "TYPED" ? String(payload.signatureImageUrl) : null,
+                        typedName: sigType === "TYPED" ? String(payload.signatureTypedName || "").trim() : null,
+                        ipAddress: (_d = req.ip) !== null && _d !== void 0 ? _d : null,
+                        userAgent: (_f = (_e = req.headers) === null || _e === void 0 ? void 0 : _e["user-agent"]) !== null && _f !== void 0 ? _f : null,
+                    },
+                });
                 if (resolvedAgentId) {
                     const existing = yield tx.agentClientAssignment.findUnique({
                         where: { clientId: userId },

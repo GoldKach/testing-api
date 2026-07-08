@@ -21,6 +21,7 @@ const STAFF_ROLES: UserRole[] = [
   UserRole.ADMIN,
   UserRole.MANAGER,
   UserRole.SUPER_ADMIN,
+  UserRole.ONBOARDING_OFFICER,
 ];
 
 const isStaffRole = (role: any): boolean =>

@@ -37,6 +37,7 @@ const STAFF_ROLES = [
     client_1.UserRole.ADMIN,
     client_1.UserRole.MANAGER,
     client_1.UserRole.SUPER_ADMIN,
+    client_1.UserRole.ONBOARDING_OFFICER,
 ];
 const isStaffRole = (role) => STAFF_ROLES.includes(role);
 const staffSelect = {

@@ -51,6 +51,7 @@ exports.loginUser = loginUser;
 exports.getAllUsers = getAllUsers;
 exports.getCurrentUser = getCurrentUser;
 exports.getUserById = getUserById;
+exports.updateSignedAgreementUrl = updateSignedAgreementUrl;
 exports.updateUser = updateUser;
 exports.deleteUser = deleteUser;
 exports.downloadActivityLogsPdf = downloadActivityLogsPdf;
@@ -499,6 +500,13 @@ function getUserById(req, res) {
                             directors: true,
                             ubos: true,
                         },
+                    }, signature: {
+                        select: {
+                            signatureType: true,
+                            imageUrl: true,
+                            typedName: true,
+                            signedAt: true,
+                        },
                     } }),
             });
             if (!user)
@@ -508,6 +516,29 @@ function getUserById(req, res) {
         catch (error) {
             console.error("Error fetching user by id:", error);
             return res.status(500).json({ data: null, error: "Server error" });
+        }
+    });
+}
+function updateSignedAgreementUrl(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        const { signedAgreementUrl } = req.body;
+        if (!signedAgreementUrl) {
+            return res.status(400).json({ error: "signedAgreementUrl is required" });
+        }
+        try {
+            const updated = yield db_1.db.individualOnboarding.updateMany({
+                where: { userId: id },
+                data: { signedAgreementUrl },
+            });
+            if (updated.count === 0) {
+                return res.status(404).json({ error: "No individual onboarding found for this user" });
+            }
+            return res.status(200).json({ ok: true });
+        }
+        catch (error) {
+            console.error("updateSignedAgreementUrl error:", error);
+            return res.status(500).json({ error: "Failed to update signed agreement URL" });
         }
     });
 }

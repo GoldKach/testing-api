@@ -26,5 +26,6 @@ userRouter.delete("/users/:id", auth_1.authenticateToken, users_1.deleteUser);
 userRouter.get("/me", auth_1.authenticateToken, users_1.getCurrentUser);
 userRouter.get("/users/:id", users_1.getUserById);
 userRouter.put("/users/:id", users_1.updateUser);
+userRouter.patch("/users/:id/signed-agreement", auth_1.authenticateToken, users_1.updateSignedAgreementUrl);
 userRouter.get("/users/:userId/activity-logs/pdf", users_1.downloadActivityLogsPdf);
 exports.default = userRouter;

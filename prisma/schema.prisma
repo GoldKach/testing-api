@@ -22,6 +22,7 @@ enum UserRole {
   CLIENT_RELATIONS
   ACCOUNT_MANAGER
   STAFF
+  ONBOARDING_OFFICER
 }
 
 enum UserStatus {
@@ -79,6 +80,12 @@ enum DepositTarget {
 enum WithdrawalType {
   HARD_WITHDRAWAL // cash out from master wallet to client's bank
   REDEMPTION      // internal transfer: portfolio wallet → master wallet
+}
+
+enum SignatureType {
+  DRAWN
+  UPLOADED
+  TYPED
 }
 
 // =====================
@@ -169,6 +176,8 @@ model User {
   activityLogs    ActivityLog[]
   agentAssignment AgentClientAssignment? @relation("ClientAssignment")
   staffProfile    StaffProfile?
+  signature       Signature?
+  amlRiskAssessment AMLRiskAssessment?
 }
 
 model RefreshToken {
@@ -939,6 +948,7 @@ model IndividualOnboarding {
   agent   StaffProfile? @relation("IndividualOnboardingAgent", fields: [agentId], references: [id], onUpdate: Cascade)
 
   // Personal info
+  title            String?   // Mr., Mrs., Ms., Dr., etc.
   fullName         String?
   dateOfBirth      DateTime?
   tin              String?
@@ -983,10 +993,11 @@ model IndividualOnboarding {
   agreeToTerms            Boolean?
 
   // Documents
-  nationalIdUrl     String?   // National ID or Passport (required)
-  passportPhotoUrl  String?
-  tinCertificateUrl String?
-  bankStatementUrl  String?   // Optional for individuals
+  nationalIdUrl        String?   // National ID or Passport (required)
+  passportPhotoUrl     String?
+  tinCertificateUrl    String?
+  bankStatementUrl     String?   // Optional for individuals
+  signedAgreementUrl   String?   // Signed copy of the Investment Management Agreement
 
   isApproved Boolean  @default(false)
   createdAt  DateTime @default(now())
@@ -1045,6 +1056,25 @@ model NextOfKin {
   updatedAt DateTime @updatedAt
 
   @@index([individualOnboardingId])
+}
+
+// =====================
+// Signature
+// =====================
+
+model Signature {
+  id               String        @id @default(cuid())
+  userId           String        @unique
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signatureType    SignatureType
+  imageUrl         String?
+  typedName        String?
+  signedAt         DateTime      @default(now())
+  agreementVersion String?
+  ipAddress        String?
+  userAgent        String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 }
 
 // =====================
@@ -1490,3 +1520,18 @@ model TransactionAuditLog {
   @@index([sequence])
 }
 
+
+
+// =====================
+// AML / CFT Risk Assessment
+// =====================
+
+model AMLRiskAssessment {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  data      Json     @default("{}")
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
