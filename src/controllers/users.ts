@@ -79,41 +79,17 @@ const userDetailSelect = {
   createdAt:     true,
   updatedAt:     true,
 
-  // ── Onboarding (new split schema — include both, useronly one will be non-null) ──
+  // ── Onboarding (full data needed for KYC PDF generation) ────────────────────
   individualOnboarding: {
-    select: {
-      id:                      true,
-      fullName:                true,
-      isApproved:              true,
-      createdAt:               true,
-      dateOfBirth:             true,
-      tin:                     true,
-      homeAddress:             true,
-      employmentStatus:        true,
-      occupation:              true,
-      companyName:             true,
-      primaryGoal:             true,
-      timeHorizon:             true,
-      riskTolerance:           true,
-      investmentExperience:    true,
-      sourceOfIncome:          true,
-      expectedInvestment:      true,
-      isPEP:                   true,
-      consentToDataCollection: true,
-      agreeToTerms:            true,
-      nationalIdUrl:           true,
-      passportPhotoUrl:        true,
-      tinCertificateUrl:       true,
-      bankStatementUrl:        true,
+    include: {
+      beneficiaries: true,
+      nextOfKin:     true,
     },
   },
   companyOnboarding: {
-    select: {
-      id:          true,
-      companyName: true,
-      companyType: true,
-      isApproved:  true,
-      createdAt:   true,
+    include: {
+      directors: true,
+      ubos:      true,
     },
   },
 
@@ -187,6 +163,16 @@ const userDetailSelect = {
     },
   },
   userPortfolios: { select: userPortfolioSelect },
+
+  // ── Signature (for KYC PDF) ───────────────────────────────────────────────
+  signature: {
+    select: {
+      signatureType: true,
+      imageUrl:      true,
+      typedName:     true,
+      signedAt:      true,
+    },
+  },
 };
 
 /* ============================

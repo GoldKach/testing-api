@@ -120,39 +120,15 @@ const userDetailSelect = {
     createdAt: true,
     updatedAt: true,
     individualOnboarding: {
-        select: {
-            id: true,
-            fullName: true,
-            isApproved: true,
-            createdAt: true,
-            dateOfBirth: true,
-            tin: true,
-            homeAddress: true,
-            employmentStatus: true,
-            occupation: true,
-            companyName: true,
-            primaryGoal: true,
-            timeHorizon: true,
-            riskTolerance: true,
-            investmentExperience: true,
-            sourceOfIncome: true,
-            expectedInvestment: true,
-            isPEP: true,
-            consentToDataCollection: true,
-            agreeToTerms: true,
-            nationalIdUrl: true,
-            passportPhotoUrl: true,
-            tinCertificateUrl: true,
-            bankStatementUrl: true,
+        include: {
+            beneficiaries: true,
+            nextOfKin: true,
         },
     },
     companyOnboarding: {
-        select: {
-            id: true,
-            companyName: true,
-            companyType: true,
-            isApproved: true,
-            createdAt: true,
+        include: {
+            directors: true,
+            ubos: true,
         },
     },
     masterWallet: {
@@ -223,6 +199,14 @@ const userDetailSelect = {
         },
     },
     userPortfolios: { select: userPortfolioSelect },
+    signature: {
+        select: {
+            signatureType: true,
+            imageUrl: true,
+            typedName: true,
+            signedAt: true,
+        },
+    },
 };
 function createUser(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
