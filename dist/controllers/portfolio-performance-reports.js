@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateAndSaveReport = generateAndSaveReport;
 exports.generateDailyReportsForAllPortfolios = generateDailyReportsForAllPortfolios;
+exports.regenerateDailyReportsForAllPortfolios = regenerateDailyReportsForAllPortfolios;
 exports.generateAllPortfoliosForDate = generateAllPortfoliosForDate;
 exports.generatePerformanceReport = generatePerformanceReport;
 exports.generateUserPerformanceReports = generateUserPerformanceReports;
@@ -325,6 +326,37 @@ function generateDailyReportsForAllPortfolios() {
             }
         }
         console.log(`📊 Daily reports — total: ${allPortfolios.length}, ✅ ${success}, ❌ ${failed}`);
+        return { success, failed, total: allPortfolios.length, errors };
+    });
+}
+function regenerateDailyReportsForAllPortfolios() {
+    return __awaiter(this, void 0, void 0, function* () {
+        console.log("🔄 Starting 5:30 PM EAT report regeneration (force-replace all clients)...");
+        const allPortfolios = yield db_1.db.userPortfolio.findMany({
+            where: { isActive: true },
+            select: { id: true, userId: true },
+        });
+        let success = 0, failed = 0;
+        const errors = [];
+        const _rNow = new Date();
+        const reportDate = new Date(Date.UTC(_rNow.getFullYear(), _rNow.getMonth(), _rNow.getDate()));
+        for (const portfolio of allPortfolios) {
+            try {
+                const reportId = yield generateAndSaveReport(portfolio.id, reportDate, false);
+                if (reportId) {
+                    success++;
+                }
+                else {
+                    failed++;
+                    errors.push(`Portfolio ${portfolio.id}: Failed to regenerate`);
+                }
+            }
+            catch (error) {
+                failed++;
+                errors.push(`Portfolio ${portfolio.id}: ${error.message}`);
+            }
+        }
+        console.log(`📊 5:30 PM regen — total: ${allPortfolios.length}, ✅ ${success}, ❌ ${failed}`);
         return { success, failed, total: allPortfolios.length, errors };
     });
 }

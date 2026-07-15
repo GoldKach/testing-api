@@ -1,7 +1,10 @@
 // src/jobs/portfolio-report-cron.ts
 import cron from "node-cron";
-import { generateDailyReportsForAllPortfolios } from "@/controllers/portfolio-performance-reports";
-import { generateDailyReportsForUser } from "@/controllers/portfolio-performance-reports";
+import {
+  generateDailyReportsForAllPortfolios,
+  regenerateDailyReportsForAllPortfolios,
+  generateDailyReportsForUser,
+} from "@/controllers/portfolio-performance-reports";
 import { db } from "@/db/db";
 import { recordAssetPriceHistory } from "@/utils/cascade";
 
@@ -39,6 +42,41 @@ async function executePortfolioReportJob(label: string) {
     console.log("============================================================");
   } catch (err) {
     console.error("❌ Portfolio report job FAILED:", err);
+    console.log("============================================================");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Internal executor — force-regen (4 PM EAT job)                     */
+/* ------------------------------------------------------------------ */
+
+async function executeRegenReportJob(label: string) {
+  const now = new Date().toISOString();
+
+  console.log("============================================================");
+  console.log(`🔄 ${label} PORTFOLIO REPORT REGENERATION`);
+  console.log(`   Time: ${now}`);
+  console.log("============================================================");
+
+  try {
+    const result = await regenerateDailyReportsForAllPortfolios();
+
+    console.log("");
+    console.log("📊 Report Regeneration Summary:");
+    console.log(`   Total portfolios : ${result.total}`);
+    console.log(`   ✅ Regenerated   : ${result.success}`);
+    console.log(`   ❌ Failed        : ${result.failed}`);
+
+    if (result.errors.length) {
+      console.log("   ⚠️  Errors:");
+      for (const err of result.errors) {
+        console.log(`      - ${err}`);
+      }
+    }
+
+    console.log("============================================================");
+  } catch (err) {
+    console.error("❌ Portfolio regen job FAILED:", err);
     console.log("============================================================");
   }
 }
@@ -231,6 +269,26 @@ export function scheduleEATMidnightPriceSnapshot() {
 }
 
 /**
+ * PRODUCTION — force-regenerates all reports at 5:30 PM EAT (14:30 UTC) every day.
+ * Deletes any existing report for today then saves a fresh snapshot so the stored
+ * record always reflects the most up-to-date prices at that moment.
+ * This runs in addition to (not instead of) the 11 AM initial generation.
+ */
+export function schedule530PMEATDailyRegen() {
+  console.log("============================================================");
+  console.log("🔄 5:30 PM EAT AUTO-REGEN SCHEDULER INITIALIZED");
+  console.log("⏰ Force-regenerate all reports at 5:30 PM EAT (14:30 UTC)");
+  console.log("============================================================");
+  cron.schedule("30 14 * * *", async () => {
+    console.log("============================================================");
+    console.log("📸 Step 1 — Snapshotting live prices for today (5:30 PM EAT)");
+    console.log("============================================================");
+    await snapshotLivePricesForToday();
+    await executeRegenReportJob("530PM-EAT-REGEN");
+  });
+}
+
+/**
  * Choose schedule based on CRON_MODE env variable.
  * CRON_MODE=daily | 30-minute | 10-minute | 5-minute | 2-minute | 1-minute | 30-second
  *
@@ -259,6 +317,10 @@ export function startPortfolioReportCronFromEnv() {
       schedule30MinutePortfolioReports();
       break;
   }
+
+  // Always register the 5:30 PM EAT force-regen regardless of CRON_MODE —
+  // it fires once per day at a fixed wall-clock time, not on a dev interval.
+  schedule530PMEATDailyRegen();
 
   console.log(`🔁 Cron mode active: ${mode}`);
 }

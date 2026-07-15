@@ -22,10 +22,10 @@ exports.schedule30SecondPortfolioReports = schedule30SecondPortfolioReports;
 exports.snapshotLivePricesForToday = snapshotLivePricesForToday;
 exports.scheduleDailyPortfolioReports = scheduleDailyPortfolioReports;
 exports.scheduleEATMidnightPriceSnapshot = scheduleEATMidnightPriceSnapshot;
+exports.schedule530PMEATDailyRegen = schedule530PMEATDailyRegen;
 exports.startPortfolioReportCronFromEnv = startPortfolioReportCronFromEnv;
 const node_cron_1 = __importDefault(require("node-cron"));
 const portfolio_performance_reports_1 = require("../controllers/portfolio-performance-reports");
-const portfolio_performance_reports_2 = require("../controllers/portfolio-performance-reports");
 const db_1 = require("../db/db");
 const cascade_1 = require("../utils/cascade");
 const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -57,6 +57,34 @@ function executePortfolioReportJob(label) {
         }
     });
 }
+function executeRegenReportJob(label) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const now = new Date().toISOString();
+        console.log("============================================================");
+        console.log(`🔄 ${label} PORTFOLIO REPORT REGENERATION`);
+        console.log(`   Time: ${now}`);
+        console.log("============================================================");
+        try {
+            const result = yield (0, portfolio_performance_reports_1.regenerateDailyReportsForAllPortfolios)();
+            console.log("");
+            console.log("📊 Report Regeneration Summary:");
+            console.log(`   Total portfolios : ${result.total}`);
+            console.log(`   ✅ Regenerated   : ${result.success}`);
+            console.log(`   ❌ Failed        : ${result.failed}`);
+            if (result.errors.length) {
+                console.log("   ⚠️  Errors:");
+                for (const err of result.errors) {
+                    console.log(`      - ${err}`);
+                }
+            }
+            console.log("============================================================");
+        }
+        catch (err) {
+            console.error("❌ Portfolio regen job FAILED:", err);
+            console.log("============================================================");
+        }
+    });
+}
 function executeUserPortfolioReportJob(userId) {
     return __awaiter(this, void 0, void 0, function* () {
         console.log("============================================================");
@@ -65,7 +93,7 @@ function executeUserPortfolioReportJob(userId) {
         console.log(`   Time  : ${new Date().toISOString()}`);
         console.log("============================================================");
         try {
-            const result = yield (0, portfolio_performance_reports_2.generateDailyReportsForUser)(userId);
+            const result = yield (0, portfolio_performance_reports_1.generateDailyReportsForUser)(userId);
             console.log("");
             console.log("📊 User Report Summary:");
             console.log(`   Total portfolios : ${result.total}`);
@@ -194,6 +222,19 @@ function scheduleEATMidnightPriceSnapshot() {
         }
     }));
 }
+function schedule530PMEATDailyRegen() {
+    console.log("============================================================");
+    console.log("🔄 5:30 PM EAT AUTO-REGEN SCHEDULER INITIALIZED");
+    console.log("⏰ Force-regenerate all reports at 5:30 PM EAT (14:30 UTC)");
+    console.log("============================================================");
+    node_cron_1.default.schedule("30 14 * * *", () => __awaiter(this, void 0, void 0, function* () {
+        console.log("============================================================");
+        console.log("📸 Step 1 — Snapshotting live prices for today (5:30 PM EAT)");
+        console.log("============================================================");
+        yield snapshotLivePricesForToday();
+        yield executeRegenReportJob("530PM-EAT-REGEN");
+    }));
+}
 function startPortfolioReportCronFromEnv() {
     if (process.env.NODE_ENV === "test") {
         console.log("🧪 Cron disabled in test environment.");
@@ -230,5 +271,6 @@ function startPortfolioReportCronFromEnv() {
             schedule30MinutePortfolioReports();
             break;
     }
+    schedule530PMEATDailyRegen();
     console.log(`🔁 Cron mode active: ${mode}`);
 }

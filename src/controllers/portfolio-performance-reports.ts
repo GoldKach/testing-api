@@ -973,6 +973,47 @@ export async function generateDailyReportsForAllPortfolios(): Promise<{
 }
 
 /* ------------------------------------------------------------------ */
+/*  Cron helper — called by the 5:30 PM EAT auto-regenerate job        */
+/*  Force-replaces existing reports for ALL portfolios (no skip).      */
+/*  generateAndSaveReport deletes then recreates under today's date    */
+/*  so every client's stored snapshot reflects the 5:30 PM prices.     */
+/* ------------------------------------------------------------------ */
+export async function regenerateDailyReportsForAllPortfolios(): Promise<{
+  success: number; failed: number; total: number; errors: string[];
+}> {
+  console.log("🔄 Starting 5:30 PM EAT report regeneration (force-replace all clients)...");
+
+  const allPortfolios = await db.userPortfolio.findMany({
+    where:  { isActive: true },
+    select: { id: true, userId: true },
+  });
+
+  let success = 0, failed = 0;
+  const errors: string[] = [];
+
+  const _rNow = new Date();
+  const reportDate = new Date(Date.UTC(_rNow.getFullYear(), _rNow.getMonth(), _rNow.getDate()));
+
+  for (const portfolio of allPortfolios) {
+    try {
+      // generateAndSaveReport already deletes the existing record then saves a fresh one
+      const reportId = await generateAndSaveReport(portfolio.id, reportDate, false);
+      if (reportId) { success++; }
+      else {
+        failed++;
+        errors.push(`Portfolio ${portfolio.id}: Failed to regenerate`);
+      }
+    } catch (error: any) {
+      failed++;
+      errors.push(`Portfolio ${portfolio.id}: ${error.message}`);
+    }
+  }
+
+  console.log(`📊 5:30 PM regen — total: ${allPortfolios.length}, ✅ ${success}, ❌ ${failed}`);
+  return { success, failed, total: allPortfolios.length, errors };
+}
+
+/* ------------------------------------------------------------------ */
 /*  POST /portfolio-performance-reports/generate-all-for-date          */
 /*  Regenerate reports for ALL portfolios for a specific date,         */
 /*  replacing any existing report to capture current close prices.     */
