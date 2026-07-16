@@ -993,11 +993,14 @@ model IndividualOnboarding {
   agreeToTerms            Boolean?
 
   // Documents
-  nationalIdUrl        String?   // National ID or Passport (required)
-  passportPhotoUrl     String?
-  tinCertificateUrl    String?
-  bankStatementUrl     String?   // Optional for individuals
-  signedAgreementUrl   String?   // Signed copy of the Investment Management Agreement
+  nationalIdUrl         String?   // National ID or Passport (required)
+  passportPhotoUrl      String?
+  tinCertificateUrl     String?
+  bankStatementUrl      String?   // Optional for individuals
+  proofOfAddressUrl     String?
+  signatureUrl          String?
+  additionalDocumentUrl String?
+  signedAgreementUrl    String?   // Signed copy of the Investment Management Agreement
 
   isApproved Boolean  @default(false)
   createdAt  DateTime @default(now())
@@ -1138,9 +1141,16 @@ model CompanyOnboarding {
   formS18Url                   String?
   form18Url                    String?
   form20Url                    String?
-  beneficialOwnershipFormUrl   String?
-  memorandumArticlesUrl        String?
-  officialAccountUrl           String?
+  beneficialOwnershipFormUrl    String?
+  memorandumArticlesUrl         String?
+  officialAccountUrl            String?
+  // Admin-editable documents
+  certificateOfIncorporationUrl String?
+  memorandumUrl                 String?
+  articlesUrl                   String?
+  signatureUrl                  String?
+  additionalDocumentUrl         String?
+  proofOfAddressUrl             String?
 
   isApproved Boolean  @default(false)
   createdAt  DateTime @default(now())

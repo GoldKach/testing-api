@@ -453,7 +453,7 @@ export async function updateIndividualOnboarding(req: Request, res: Response) {
 
     const documentFields = [
       "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
-      "bankStatementUrl", "proofOfAddressUrl", "additionalDocumentUrl"
+      "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
     ];
 
     for (const field of stringFields) {

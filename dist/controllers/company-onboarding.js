@@ -532,8 +532,10 @@ function updateCompanyOnboarding(req, res) {
             const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
             const dateFields = ["incorporationDate"];
             const documentFields = [
+                "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
+                "constitutionUrl", "tradingLicenseUrl",
                 "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
-                "bankStatementUrl", "tinCertificateUrl", "logoDocUrl", "additionalDocumentUrl"
+                "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
             ];
             for (const field of stringFields) {
                 if (payload[field] !== undefined) {

@@ -614,8 +614,10 @@ export async function updateCompanyOnboarding(req: Request, res: Response) {
     const dateFields = ["incorporationDate"];
 
     const documentFields = [
+      "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
+      "constitutionUrl", "tradingLicenseUrl",
       "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
-      "bankStatementUrl", "tinCertificateUrl", "logoDocUrl", "additionalDocumentUrl"
+      "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
     ];
 
     for (const field of stringFields) {

@@ -393,7 +393,7 @@ function updateIndividualOnboarding(req, res) {
             const dateFields = ["dateOfBirth", "incorporationDate"];
             const documentFields = [
                 "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
-                "bankStatementUrl", "proofOfAddressUrl", "additionalDocumentUrl"
+                "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
             ];
             for (const field of stringFields) {
                 if (payload[field] !== undefined) {
