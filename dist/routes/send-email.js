@@ -11,11 +11,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const resend_1 = require("resend");
+const db_1 = require("../db/db");
+const auth_1 = require("../utils/auth");
 const router = (0, express_1.Router)();
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM = process.env.MAIL_FROM || "Goldkach <info@goldkach.co.ug>";
 const resend = new resend_1.Resend(RESEND_API_KEY);
-router.post("/send-email", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/send-email", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
     try {
         const { recipients, subject, body } = req.body;
         if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
@@ -41,13 +44,13 @@ router.post("/send-email", (req, res) => __awaiter(void 0, void 0, void 0, funct
             </a>
             <p style="margin-top: 12px; margin-bottom: 0; font-size: 18px; font-weight: 700; color: #2B2F77;">GoldKach Limited</p>
           </div>
-          
+
           <div style="padding: 0 8px;">
             ${body}
           </div>
-          
+
           <hr style="margin-top: 24px; margin-bottom: 16px; border-top: 1px solid #e0e0e0;" />
-          
+
           <div style="text-align: center; font-size: 12px; color: #777;">
             <p style="margin: 4px 0;">
               <a href="https://goldkach.co.ug" style="color: #2B2F77; text-decoration: none;">Website</a>
@@ -83,6 +86,23 @@ router.post("/send-email", (req, res) => __awaiter(void 0, void 0, void 0, funct
                 errors.push(`${to}: ${err}`);
             }
         }
+        try {
+            const sender = req.user;
+            yield db_1.db.sentEmail.create({
+                data: {
+                    subject,
+                    message: body,
+                    recipients,
+                    sentCount,
+                    failedCount,
+                    sentBy: (_a = sender === null || sender === void 0 ? void 0 : sender.userId) !== null && _a !== void 0 ? _a : null,
+                    sentByName: (_b = sender === null || sender === void 0 ? void 0 : sender.email) !== null && _b !== void 0 ? _b : null,
+                },
+            });
+        }
+        catch (dbErr) {
+            console.error("Failed to save sent email log:", dbErr);
+        }
         return res.status(200).json({
             success: true,
             sent: sentCount,
@@ -92,6 +112,19 @@ router.post("/send-email", (req, res) => __awaiter(void 0, void 0, void 0, funct
     }
     catch (error) {
         console.error("Send email error:", error);
+        return res.status(500).json({ success: false, error: "Server error" });
+    }
+}));
+router.get("/send-email/history", auth_1.authenticateToken, (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const emails = yield db_1.db.sentEmail.findMany({
+            orderBy: { sentAt: "desc" },
+            take: 200,
+        });
+        return res.status(200).json({ success: true, data: emails });
+    }
+    catch (error) {
+        console.error("Fetch email history error:", error);
         return res.status(500).json({ success: false, error: "Server error" });
     }
 }));

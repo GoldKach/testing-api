@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { Resend } from "resend";
+import { db } from "@/db/db";
+import { authenticateToken, AuthRequest } from "@/utils/auth";
 
 const router = Router();
 
@@ -8,7 +10,7 @@ const FROM = process.env.MAIL_FROM || "Goldkach <info@goldkach.co.ug>";
 
 const resend = new Resend(RESEND_API_KEY);
 
-router.post("/send-email", async (req, res) => {
+router.post("/send-email", authenticateToken, async (req: AuthRequest, res) => {
   try {
     const { recipients, subject, body } = req.body;
 
@@ -37,13 +39,13 @@ router.post("/send-email", async (req, res) => {
             </a>
             <p style="margin-top: 12px; margin-bottom: 0; font-size: 18px; font-weight: 700; color: #2B2F77;">GoldKach Limited</p>
           </div>
-          
+
           <div style="padding: 0 8px;">
             ${body}
           </div>
-          
+
           <hr style="margin-top: 24px; margin-bottom: 16px; border-top: 1px solid #e0e0e0;" />
-          
+
           <div style="text-align: center; font-size: 12px; color: #777;">
             <p style="margin: 4px 0;">
               <a href="https://goldkach.co.ug" style="color: #2B2F77; text-decoration: none;">Website</a>
@@ -80,6 +82,24 @@ router.post("/send-email", async (req, res) => {
       }
     }
 
+    // Persist to SentEmail log regardless of partial failures
+    try {
+      const sender = req.user;
+      await db.sentEmail.create({
+        data: {
+          subject,
+          message: body,
+          recipients,
+          sentCount,
+          failedCount,
+          sentBy:   sender?.userId ?? null,
+          sentByName: sender?.email ?? null,
+        },
+      });
+    } catch (dbErr) {
+      console.error("Failed to save sent email log:", dbErr);
+    }
+
     return res.status(200).json({
       success: true,
       sent: sentCount,
@@ -88,6 +108,20 @@ router.post("/send-email", async (req, res) => {
     });
   } catch (error) {
     console.error("Send email error:", error);
+    return res.status(500).json({ success: false, error: "Server error" });
+  }
+});
+
+// GET /send-email/history — return all sent emails, newest first
+router.get("/send-email/history", authenticateToken, async (_req, res) => {
+  try {
+    const emails = await db.sentEmail.findMany({
+      orderBy: { sentAt: "desc" },
+      take: 200,
+    });
+    return res.status(200).json({ success: true, data: emails });
+  } catch (error) {
+    console.error("Fetch email history error:", error);
     return res.status(500).json({ success: false, error: "Server error" });
   }
 });

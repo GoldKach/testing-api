@@ -1545,3 +1545,19 @@ model AMLRiskAssessment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// =====================
+// Sent Email Log
+// =====================
+
+model SentEmail {
+  id           String   @id @default(cuid())
+  subject      String
+  message      String   @db.Text
+  recipients   String[] // list of email addresses
+  sentCount    Int      @default(0)
+  failedCount  Int      @default(0)
+  sentBy       String?  // userId of the admin/staff who sent it
+  sentByName   String?
+  sentAt       DateTime @default(now())
+}
