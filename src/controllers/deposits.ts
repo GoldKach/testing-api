@@ -31,7 +31,7 @@ const SORTABLE_FIELDS = new Set<keyof Prisma.DepositOrderByWithRelationInput>([
 ]);
 
 const DEPOSIT_INCLUDE: Prisma.DepositInclude = {
-  user:            { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+  user:            { select: { id: true, firstName: true, lastName: true, email: true, phone: true, imageUrl: true, individualOnboarding: { select: { passportPhotoUrl: true } } } },
   createdBy:       { select: { id: true, firstName: true, lastName: true, role: true } },
   approvedBy:      { select: { id: true, firstName: true, lastName: true, role: true } },
   rejectedBy:      { select: { id: true, firstName: true, lastName: true, role: true } },
@@ -290,6 +290,96 @@ export async function listDeposits(req: Request, res: Response) {
   } catch (error) {
     console.error("listDeposits error:", error);
     return res.status(500).json({ data: null, error: "Failed to list deposits" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  ANALYTICS  GET /deposits/analytics                                   */
+/* ------------------------------------------------------------------ */
+export async function getDepositsAnalytics(_req: Request, res: Response) {
+  try {
+    const now = new Date();
+
+    const todayStart      = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const weekStart       = new Date(todayStart);
+    weekStart.setUTCDate(todayStart.getUTCDate() - todayStart.getUTCDay());
+    const monthStart      = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const threeMonthsStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, 1));
+    const q               = Math.floor(now.getUTCMonth() / 3);
+    const quarterStart    = new Date(Date.UTC(now.getUTCFullYear(), q * 3, 1));
+    const yearStart       = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+
+    const last30DaysStart  = new Date(todayStart); last30DaysStart.setUTCDate(todayStart.getUTCDate() - 29);
+    const last12WeeksStart = new Date(todayStart); last12WeeksStart.setUTCDate(todayStart.getUTCDate() - 84);
+    const last12MonthsStart = new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1));
+
+    const agg = (gte: Date) =>
+      db.deposit.aggregate({
+        _sum: { amount: true }, _count: { id: true },
+        where: { transactionStatus: "APPROVED", createdAt: { gte } },
+      });
+
+    const [todayAgg, weekAgg, monthAgg, threeMAgg, quarterAgg, yearAgg] = await Promise.all([
+      agg(todayStart), agg(weekStart), agg(monthStart),
+      agg(threeMonthsStart), agg(quarterStart), agg(yearStart),
+    ]);
+
+    type RawRow = { bucket: Date; count: bigint; amount: any };
+
+    const [dailyRows, weeklyRows, monthlyRows] = await Promise.all([
+      db.$queryRaw<RawRow[]>`
+        SELECT DATE_TRUNC('day',   "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last30DaysStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+      db.$queryRaw<RawRow[]>`
+        SELECT DATE_TRUNC('week',  "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last12WeeksStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+      db.$queryRaw<RawRow[]>`
+        SELECT DATE_TRUNC('month', "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last12MonthsStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+    ]);
+
+    const toRows = (rows: RawRow[], slice: number) =>
+      rows.map(r => ({
+        label:  r.bucket.toISOString().slice(0, slice),
+        count:  Number(r.count),
+        amount: Number(r.amount),
+      }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        periods: {
+          today:       { count: todayAgg._count.id,   amount: Number(todayAgg._sum.amount   ?? 0) },
+          thisWeek:    { count: weekAgg._count.id,    amount: Number(weekAgg._sum.amount    ?? 0) },
+          thisMonth:   { count: monthAgg._count.id,   amount: Number(monthAgg._sum.amount   ?? 0) },
+          last3Months: { count: threeMAgg._count.id,  amount: Number(threeMAgg._sum.amount  ?? 0) },
+          lastQuarter: { count: quarterAgg._count.id, amount: Number(quarterAgg._sum.amount ?? 0) },
+          lastYear:    { count: yearAgg._count.id,    amount: Number(yearAgg._sum.amount    ?? 0) },
+        },
+        daily:   toRows(dailyRows,   10),
+        weekly:  toRows(weeklyRows,  10),
+        monthly: toRows(monthlyRows,  7),
+      },
+      error: null,
+    });
+  } catch (error) {
+    console.error("getDepositsAnalytics error:", error);
+    return res.status(500).json({ success: false, data: null, error: "Failed to fetch deposit analytics" });
   }
 }
 

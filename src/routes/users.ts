@@ -16,7 +16,8 @@
 
 
 // src/routes/user.routes.ts
-import { createUser, deleteUser, getAllUsers, getCurrentUser, getUserById, loginUser, updateUser, updateSignedAgreementUrl, downloadActivityLogsPdf } from "@/controllers/users";
+import { createUser, deleteUser, getAllUsers, getCurrentUser, getUserById, updateUser, updateSignedAgreementUrl, downloadActivityLogsPdf } from "@/controllers/users";
+import { initiateLogin } from "@/controllers/auth-controller-2fa";
 import { registrationLimiter } from "@/middleware/rate-limit";
 import { authenticateToken } from "@/utils/auth";
 import express from "express";
@@ -39,7 +40,7 @@ const loginLimiter = rateLimit({
 // Routes
 // userRouter.post("/register", createUser);
 userRouter.post("/register", registrationLimiter, createUser);
-userRouter.post("/login", loginLimiter, loginUser); 
+userRouter.post("/login", loginLimiter, initiateLogin); // legacy path → now enforces 2FA like /auth/login
 userRouter.get("/users", getAllUsers);
 userRouter.delete("/users/:id", authenticateToken, deleteUser);
 userRouter.get("/me", authenticateToken, getCurrentUser);

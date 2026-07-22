@@ -2,6 +2,7 @@
 import { Router } from "express";
 import {
   listDeposits,
+  getDepositsAnalytics,
   getDepositById,
   createDeposit,
   updateDeposit,
@@ -18,6 +19,9 @@ depositsRouter.get("/deposits", listDeposits);
 
 // Get deposit fee summary for a user
 depositsRouter.get("/deposits/summary/:userId", getDepositFeeSummary);
+
+// Analytics — period totals + daily/weekly/monthly charts (must be before /:id)
+depositsRouter.get("/deposits/analytics", getDepositsAnalytics);
 
 // Read single (supports ?include=user,wallet)
 depositsRouter.get("/deposits/:id", getDepositById);
