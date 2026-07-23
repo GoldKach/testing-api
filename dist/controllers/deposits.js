@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.listDeposits = listDeposits;
+exports.getDepositsAnalytics = getDepositsAnalytics;
 exports.getDepositById = getDepositById;
 exports.createDeposit = createDeposit;
 exports.updateDeposit = updateDeposit;
@@ -38,7 +39,7 @@ const SORTABLE_FIELDS = new Set([
     "createdAt", "amount", "transactionStatus",
 ]);
 const DEPOSIT_INCLUDE = {
-    user: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+    user: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, imageUrl: true, individualOnboarding: { select: { passportPhotoUrl: true } } } },
     createdBy: { select: { id: true, firstName: true, lastName: true, role: true } },
     approvedBy: { select: { id: true, firstName: true, lastName: true, role: true } },
     rejectedBy: { select: { id: true, firstName: true, lastName: true, role: true } },
@@ -230,6 +231,87 @@ function listDeposits(req, res) {
         catch (error) {
             console.error("listDeposits error:", error);
             return res.status(500).json({ data: null, error: "Failed to list deposits" });
+        }
+    });
+}
+function getDepositsAnalytics(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f;
+        try {
+            const now = new Date();
+            const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+            const weekStart = new Date(todayStart);
+            weekStart.setUTCDate(todayStart.getUTCDate() - todayStart.getUTCDay());
+            const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+            const threeMonthsStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, 1));
+            const q = Math.floor(now.getUTCMonth() / 3);
+            const quarterStart = new Date(Date.UTC(now.getUTCFullYear(), q * 3, 1));
+            const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+            const last30DaysStart = new Date(todayStart);
+            last30DaysStart.setUTCDate(todayStart.getUTCDate() - 29);
+            const last12WeeksStart = new Date(todayStart);
+            last12WeeksStart.setUTCDate(todayStart.getUTCDate() - 84);
+            const last12MonthsStart = new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1));
+            const agg = (gte) => db_1.db.deposit.aggregate({
+                _sum: { amount: true }, _count: { id: true },
+                where: { transactionStatus: "APPROVED", createdAt: { gte } },
+            });
+            const [todayAgg, weekAgg, monthAgg, threeMAgg, quarterAgg, yearAgg] = yield Promise.all([
+                agg(todayStart), agg(weekStart), agg(monthStart),
+                agg(threeMonthsStart), agg(quarterStart), agg(yearStart),
+            ]);
+            const [dailyRows, weeklyRows, monthlyRows] = yield Promise.all([
+                db_1.db.$queryRaw `
+        SELECT DATE_TRUNC('day',   "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last30DaysStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+                db_1.db.$queryRaw `
+        SELECT DATE_TRUNC('week',  "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last12WeeksStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+                db_1.db.$queryRaw `
+        SELECT DATE_TRUNC('month', "createdAt" AT TIME ZONE 'UTC') AS bucket,
+               COUNT(*)::bigint                                     AS count,
+               COALESCE(SUM(amount), 0)                            AS amount
+        FROM   "Deposit"
+        WHERE  "transactionStatus" = 'APPROVED' AND "createdAt" >= ${last12MonthsStart}
+        GROUP  BY bucket ORDER BY bucket ASC
+      `,
+            ]);
+            const toRows = (rows, slice) => rows.map(r => ({
+                label: r.bucket.toISOString().slice(0, slice),
+                count: Number(r.count),
+                amount: Number(r.amount),
+            }));
+            return res.status(200).json({
+                success: true,
+                data: {
+                    periods: {
+                        today: { count: todayAgg._count.id, amount: Number((_a = todayAgg._sum.amount) !== null && _a !== void 0 ? _a : 0) },
+                        thisWeek: { count: weekAgg._count.id, amount: Number((_b = weekAgg._sum.amount) !== null && _b !== void 0 ? _b : 0) },
+                        thisMonth: { count: monthAgg._count.id, amount: Number((_c = monthAgg._sum.amount) !== null && _c !== void 0 ? _c : 0) },
+                        last3Months: { count: threeMAgg._count.id, amount: Number((_d = threeMAgg._sum.amount) !== null && _d !== void 0 ? _d : 0) },
+                        lastQuarter: { count: quarterAgg._count.id, amount: Number((_e = quarterAgg._sum.amount) !== null && _e !== void 0 ? _e : 0) },
+                        lastYear: { count: yearAgg._count.id, amount: Number((_f = yearAgg._sum.amount) !== null && _f !== void 0 ? _f : 0) },
+                    },
+                    daily: toRows(dailyRows, 10),
+                    weekly: toRows(weeklyRows, 10),
+                    monthly: toRows(monthlyRows, 7),
+                },
+                error: null,
+            });
+        }
+        catch (error) {
+            console.error("getDepositsAnalytics error:", error);
+            return res.status(500).json({ success: false, data: null, error: "Failed to fetch deposit analytics" });
         }
     });
 }

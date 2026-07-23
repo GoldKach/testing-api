@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const users_1 = require("../controllers/users");
+const auth_controller_2fa_1 = require("../controllers/auth-controller-2fa");
 const rate_limit_1 = require("../middleware/rate-limit");
 const auth_1 = require("../utils/auth");
 const express_1 = __importDefault(require("express"));
@@ -20,7 +21,7 @@ const loginLimiter = (0, express_rate_limit_1.default)({
     legacyHeaders: false,
 });
 userRouter.post("/register", rate_limit_1.registrationLimiter, users_1.createUser);
-userRouter.post("/login", loginLimiter, users_1.loginUser);
+userRouter.post("/login", loginLimiter, auth_controller_2fa_1.initiateLogin);
 userRouter.get("/users", users_1.getAllUsers);
 userRouter.delete("/users/:id", auth_1.authenticateToken, users_1.deleteUser);
 userRouter.get("/me", auth_1.authenticateToken, users_1.getCurrentUser);
