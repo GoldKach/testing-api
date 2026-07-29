@@ -16,6 +16,7 @@ exports.createAsset = createAsset;
 exports.updateAsset = updateAsset;
 exports.deleteAsset = deleteAsset;
 exports.getAssetPriceHistory = getAssetPriceHistory;
+exports.getAssetPriceHistoryById = getAssetPriceHistoryById;
 exports.batchUpsertAssetPriceHistory = batchUpsertAssetPriceHistory;
 exports.batchUpdateAssetPrices = batchUpdateAssetPrices;
 const db_1 = require("../db/db");
@@ -320,6 +321,33 @@ function getAssetPriceHistory(req, res) {
         }
         catch (error) {
             console.error("getAssetPriceHistory error:", error);
+            return res.status(500).json({ data: null, error: "Failed to fetch asset price history" });
+        }
+    });
+}
+function getAssetPriceHistoryById(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const asset = yield db_1.db.asset.findUnique({ where: { id }, select: { id: true } });
+            if (!asset) {
+                return res.status(404).json({ data: null, error: "Asset not found" });
+            }
+            const rows = yield db_1.db.assetPriceHistory.findMany({
+                where: { assetId: id },
+                orderBy: { priceDate: "desc" },
+                select: { id: true, priceDate: true, closePrice: true, createdAt: true },
+            });
+            const data = rows.map((r) => ({
+                id: r.id,
+                date: r.priceDate.toISOString().split("T")[0],
+                closePrice: Number(r.closePrice),
+                createdAt: r.createdAt.toISOString(),
+            }));
+            return res.status(200).json({ data, error: null });
+        }
+        catch (error) {
+            console.error("getAssetPriceHistoryById error:", error);
             return res.status(500).json({ data: null, error: "Failed to fetch asset price history" });
         }
     });

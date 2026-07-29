@@ -10,5 +10,6 @@ assetsRouter.get("/assets/symbol/:symbol", assets_1.getAssetBySymbol);
 assetsRouter.post("/assets", assets_1.createAsset);
 assetsRouter.patch("/assets/:id", assets_1.updateAsset);
 assetsRouter.delete("/assets/:id", assets_1.deleteAsset);
+assetsRouter.get("/assets/:id/price-history", assets_1.getAssetPriceHistoryById);
 assetsRouter.get("/assets/:id", assets_1.getAssetById);
 exports.default = assetsRouter;

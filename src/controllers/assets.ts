@@ -488,6 +488,39 @@ export async function getAssetPriceHistory(req: Request, res: Response) {
 }
 
 /**
+ * GET /assets/:id/price-history
+ * Returns all stored AssetPriceHistory rows for a single asset, newest-first.
+ */
+export async function getAssetPriceHistoryById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+
+    const asset = await db.asset.findUnique({ where: { id }, select: { id: true } });
+    if (!asset) {
+      return res.status(404).json({ data: null, error: "Asset not found" });
+    }
+
+    const rows = await db.assetPriceHistory.findMany({
+      where:   { assetId: id },
+      orderBy: { priceDate: "desc" },
+      select:  { id: true, priceDate: true, closePrice: true, createdAt: true },
+    });
+
+    const data = rows.map((r) => ({
+      id:         r.id,
+      date:       r.priceDate.toISOString().split("T")[0],
+      closePrice: Number(r.closePrice),
+      createdAt:  r.createdAt.toISOString(),
+    }));
+
+    return res.status(200).json({ data, error: null });
+  } catch (error) {
+    console.error("getAssetPriceHistoryById error:", error);
+    return res.status(500).json({ data: null, error: "Failed to fetch asset price history" });
+  }
+}
+
+/**
  * POST /assets/price-history/batch
  * Body: { date: "YYYY-MM-DD", prices: [{ assetId, closePrice }] }
  * Upserts one AssetPriceHistory row per asset for the given date.
