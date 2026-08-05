@@ -117,6 +117,22 @@ function initiateLogin(req, res) {
                     error: "Account is deactivated. Contact support to reactivate."
                 });
             }
+            if (user.status === client_1.UserStatus.INACTIVE) {
+                auditService_1.auditService.logSecurity({
+                    eventType: "ACCOUNT_LOCKED",
+                    riskLevel: "MEDIUM",
+                    userId: user.id,
+                    userEmail: user.email,
+                    ipAddress: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.ipAddress,
+                    userAgent: auditCtx === null || auditCtx === void 0 ? void 0 : auditCtx.userAgent,
+                    description: "Login attempted on inactive account",
+                });
+                return res.status(403).json({
+                    success: false,
+                    data: null,
+                    error: "Your account is inactive. Please contact your administrator."
+                });
+            }
             if (!user.password) {
                 return res.status(401).json({
                     success: false,
