@@ -110,6 +110,23 @@ export async function initiateLogin(req: Request, res: Response) {
       });
     }
 
+    if (user.status === UserStatus.INACTIVE) {
+      auditService.logSecurity({
+        eventType:   "ACCOUNT_LOCKED",
+        riskLevel:   "MEDIUM",
+        userId:      user.id,
+        userEmail:   user.email,
+        ipAddress:   auditCtx?.ipAddress,
+        userAgent:   auditCtx?.userAgent,
+        description: "Login attempted on inactive account",
+      });
+      return res.status(403).json({
+        success: false,
+        data: null,
+        error: "Your account is inactive. Please contact your administrator."
+      });
+    }
+
     // Verify password
     if (!user.password) {
       return res.status(401).json({
