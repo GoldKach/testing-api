@@ -7,6 +7,7 @@ import {
   validateTin,
   approveIndividualOnboarding,
   updateIndividualOnboarding,
+  upsertIndividualOnboardingByUserId,
 } from "@/controllers/individual-onboarding";
 import {
   submitCompanyOnboarding,
@@ -18,6 +19,7 @@ import {
   getCompanyUBOs,
   approveCompanyOnboarding,
   updateCompanyOnboarding,
+  upsertCompanyOnboardingByUserId,
 } from "@/controllers/company-onboarding";
 import { authenticateToken } from "@/utils/auth";
 
@@ -38,6 +40,7 @@ onboardingRouter.post("/onboarding/validate-tin", validateTin);
 onboardingRouter.post("/onboarding/individual", authenticateToken, submitIndividualOnboarding);
 onboardingRouter.get("/onboarding/individual/me", authenticateToken, getMyIndividualOnboarding);
 onboardingRouter.get("/onboarding/individual/user/:userId", authenticateToken, getIndividualOnboardingByUserId);
+onboardingRouter.patch("/onboarding/individual/user/:userId", authenticateToken, upsertIndividualOnboardingByUserId);
 onboardingRouter.patch("/onboarding/individual/:id/approve", authenticateToken, approveIndividualOnboarding);
 onboardingRouter.patch("/onboarding/individual/:id", authenticateToken, updateIndividualOnboarding);
 
@@ -48,6 +51,7 @@ onboardingRouter.patch("/onboarding/individual/:id", authenticateToken, updateIn
 onboardingRouter.post("/onboarding/company", authenticateToken, submitCompanyOnboarding);
 onboardingRouter.get("/onboarding/company/me", authenticateToken, getMyCompanyOnboarding);
 onboardingRouter.get("/onboarding/company/user/:userId", authenticateToken, getCompanyOnboardingByUserId);
+onboardingRouter.patch("/onboarding/company/user/:userId", authenticateToken, upsertCompanyOnboardingByUserId);
 onboardingRouter.patch("/onboarding/company/:id/approve", authenticateToken, approveCompanyOnboarding);
 onboardingRouter.patch("/onboarding/company/:id", authenticateToken, updateCompanyOnboarding);
 onboardingRouter.put("/onboarding/company/directors", authenticateToken, updateCompanyDirectors);

@@ -487,6 +487,22 @@ function approveWithdrawal(req, res) {
                         },
                     });
                 }
+                yield tx.portfolioRedemptionShareDelta.createMany({
+                    data: assetResults.map((r) => {
+                        const ua = up.userAssets.find((u) => u.assetId === r.assetId);
+                        return {
+                            userPortfolioId: existing.userPortfolioId,
+                            withdrawalId: id,
+                            assetId: r.assetId,
+                            sharesRedeemed: r.snap.stock,
+                            priceAtRedemption: r.snap.closePrice,
+                            stockBefore: Number(ua.stock),
+                            stockAfter: r.x2.stock,
+                            redemptionDate: approvalDate,
+                        };
+                    }),
+                    skipDuplicates: true,
+                });
                 const newPortfolioValue = assetResults.reduce((s, r) => s + r.x2.closeValue, 0);
                 const newTotalLossGain = newPortfolioValue - Number(up.totalInvested);
                 yield tx.userPortfolio.update({

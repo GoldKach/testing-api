@@ -10,6 +10,7 @@ import {
   getPerformanceStatistics,
   cleanupPerformanceReports,
   backfillAssetSnapshots,
+  backfillHistoricalReports,
 } from "@/controllers/portfolio-performance-reports";
 import {
   generateUserPerformanceReports,
@@ -85,6 +86,12 @@ portfolioPerformanceReportsRouter.delete(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/backfill-snapshots",
   backfillAssetSnapshots
+);
+
+// Backfill historical reports for a date range using price history + share reconstruction
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/backfill-historical",
+  backfillHistoricalReports
 );
 
 // ── Dynamic :id route last ─────────────────────────────────────────

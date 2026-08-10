@@ -624,6 +624,119 @@ function determineAssetClass(asset: any): AssetClass {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Historical stock reconstruction                                     */
+/*                                                                      */
+/*  Priority order for a given targetDate:                              */
+/*  1. PortfolioAssetDailyState on or before targetDate (most recent)  */
+/*     — written nightly by the cron from the moment Path 2 launched.  */
+/*  2. Current UserPortfolioAsset.stock + PortfolioRedemptionShareDelta */
+/*     for all redemptions AFTER targetDate (add back shares sold).    */
+/*  3. Current UserPortfolioAsset as-is (no redemptions on record).    */
+/* ------------------------------------------------------------------ */
+
+type StockEntry = {
+  stock:                number;
+  costPerShare:         number;
+  costPrice:            number;
+  allocationPercentage: number;
+  source:               "daily-snapshot" | "delta-reconstruction" | "live";
+};
+
+async function resolveHistoricalStocks(
+  userPortfolioId: string,
+  userAssets: Array<{
+    assetId: string;
+    stock: number;
+    costPerShare: number;
+    costPrice: number;
+    allocationPercentage: number;
+  }>,
+  targetDateUTC: Date,
+): Promise<Map<string, StockEntry>> {
+  const result = new Map<string, StockEntry>();
+  const assetIds = userAssets.map((ua) => ua.assetId);
+
+  // ── 1. Try PortfolioAssetDailyState: most-recent snapshot ≤ targetDate ──
+  const dailyRows = await db.portfolioAssetDailyState.findMany({
+    where: {
+      userPortfolioId,
+      assetId:      { in: assetIds },
+      snapshotDate: { lte: targetDateUTC },
+    },
+    orderBy: { snapshotDate: "desc" },
+  });
+
+  const snapshotMap = new Map<string, typeof dailyRows[0]>();
+  for (const row of dailyRows) {
+    if (!snapshotMap.has(row.assetId)) snapshotMap.set(row.assetId, row);
+  }
+
+  // If we have a daily snapshot for EVERY asset, use them (best accuracy)
+  if (snapshotMap.size === assetIds.length) {
+    for (const ua of userAssets) {
+      const snap = snapshotMap.get(ua.assetId)!;
+      result.set(ua.assetId, {
+        stock:                Number(snap.stock),
+        costPerShare:         Number(snap.costPerShare),
+        costPrice:            Number(snap.costPrice),
+        allocationPercentage: Number(snap.allocationPercentage),
+        source:               "daily-snapshot",
+      });
+    }
+    return result;
+  }
+
+  // ── 2. Delta reconstruction: current stock + add back redeemed shares ──
+  // Fetch all redemption deltas for this portfolio AFTER the target date
+  const deltas = await db.portfolioRedemptionShareDelta.findMany({
+    where: {
+      userPortfolioId,
+      assetId:        { in: assetIds },
+      redemptionDate: { gt: targetDateUTC },
+    },
+  });
+
+  // Sum shares redeemed per asset after targetDate
+  const redeemedAfter = new Map<string, number>();
+  for (const d of deltas) {
+    redeemedAfter.set(d.assetId, (redeemedAfter.get(d.assetId) ?? 0) + Number(d.sharesRedeemed));
+  }
+
+  const hasDeltaData = deltas.length > 0;
+
+  for (const ua of userAssets) {
+    // If we have a daily snapshot for this specific asset, use it
+    if (snapshotMap.has(ua.assetId)) {
+      const snap = snapshotMap.get(ua.assetId)!;
+      result.set(ua.assetId, {
+        stock:                Number(snap.stock),
+        costPerShare:         Number(snap.costPerShare),
+        costPrice:            Number(snap.costPrice),
+        allocationPercentage: Number(snap.allocationPercentage),
+        source:               "daily-snapshot",
+      });
+      continue;
+    }
+
+    const extraShares = redeemedAfter.get(ua.assetId) ?? 0;
+    const reconstructedStock = Math.max(0, Number(ua.stock) + extraShares);
+
+    // Reconstruct cost price from the corrected share count × weighted avg cost per share
+    const reconstructedCostPrice = reconstructedStock * Number(ua.costPerShare);
+
+    result.set(ua.assetId, {
+      stock:                reconstructedStock,
+      costPerShare:         Number(ua.costPerShare),
+      costPrice:            reconstructedCostPrice,
+      allocationPercentage: Number(ua.allocationPercentage),
+      source:               hasDeltaData ? "delta-reconstruction" : "live",
+    });
+  }
+
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Core: generate report from final merged (X2) positions only        */
 /* ------------------------------------------------------------------ */
 
@@ -718,6 +831,18 @@ async function generatePortfolioReport(
       throw new MissingHistoryPricesError(missingAssets, reportDateStr);
     }
 
+    // ── Resolve historical share counts ──────────────────────────────────
+    // For today's reports: live userAssets (source = "live") are accurate.
+    // For historical dates: use daily state snapshots or delta reconstruction
+    // so that future redemptions don't corrupt the historical record.
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const isHistorical = reportDateUTC.getTime() < todayUTC.getTime();
+
+    const historicalStockMap = isHistorical
+      ? await resolveHistoricalStocks(userPortfolioId, userPortfolio.userAssets, reportDateUTC)
+      : null;
+
     // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
     let totalCostPrice  = 0;
     let totalCloseValue = 0;
@@ -728,8 +853,10 @@ async function generatePortfolioReport(
     ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
 
     for (const ua of userPortfolio.userAssets) {
-      const costPrice  = Number(ua.costPrice ?? 0);
-      const stock      = Number(ua.stock     ?? 0);
+      // Use reconstructed stock/costPrice for historical dates, live values for today
+      const resolved   = historicalStockMap?.get(ua.assetId);
+      const stock      = resolved ? resolved.stock      : Number(ua.stock     ?? 0);
+      const costPrice  = resolved ? resolved.costPrice  : Number(ua.costPrice ?? 0);
       const histPrice  = historicalPriceMap.get(ua.assetId);
       // strict=false (cron) falls back to live price when history is missing
       const closePrice = histPrice !== undefined ? histPrice : Number(ua.asset.closePrice ?? 0);
@@ -759,8 +886,8 @@ async function generatePortfolioReport(
     const cashIndex = assetBreakdown.findIndex((a) => a.assetClass === "CASH");
     if (cashIndex >= 0) {
       assetBreakdown[cashIndex].totalCashValue = cashAtBank;
-      assetBreakdown[cashIndex].percentage = (totalCloseValue + cashAtBank) > 0 
-        ? (cashAtBank / (totalCloseValue + cashAtBank)) * 100 
+      assetBreakdown[cashIndex].percentage = (totalCloseValue + cashAtBank) > 0
+        ? (cashAtBank / (totalCloseValue + cashAtBank)) * 100
         : 0;
       assetBreakdown[cashIndex].holdings = cashAtBank > 0 ? 1 : 0;
     }
@@ -779,7 +906,14 @@ async function generatePortfolioReport(
 
     // ── Sub-portfolio snapshots: historical record of each slice ──────
     // X (gen=0) = original investment, X1 (gen=1) = first top-up, etc.
-    const subPortfolioSnapshots: SubPortfolioSnapshot[] = userPortfolio.subPortfolios.map((sub) => ({
+    // For historical reports, only include sub-portfolios created on or before the report date.
+    const relevantSubPortfolios = isHistorical
+      ? userPortfolio.subPortfolios.filter(
+          (sub) => new Date(sub.snapshotDate).getTime() <= reportDateUTC.getTime()
+        )
+      : userPortfolio.subPortfolios;
+
+    const subPortfolioSnapshots: SubPortfolioSnapshot[] = relevantSubPortfolios.map((sub) => ({
       subPortfolioId:  sub.id,
       generation:      sub.generation,
       label:           sub.label,
@@ -793,8 +927,10 @@ async function generatePortfolioReport(
 
     // ── Per-asset snapshot: lock in the history price for this report date ─
     const assetSnapshots: AssetSnapshot[] = userPortfolio.userAssets.map((ua) => {
-      const stock      = Number(ua.stock     ?? 0);
-      const costPrice  = Number(ua.costPrice ?? 0);
+      const resolved   = historicalStockMap?.get(ua.assetId);
+      const stock      = resolved ? resolved.stock      : Number(ua.stock     ?? 0);
+      const costPrice  = resolved ? resolved.costPrice  : Number(ua.costPrice ?? 0);
+      const costPerShare = resolved ? resolved.costPerShare : Number(ua.costPerShare ?? 0);
       const histPrice  = historicalPriceMap.get(ua.assetId);
       const closePrice = histPrice !== undefined ? histPrice : Number(ua.asset.closePrice ?? 0);
       const closeValue = closePrice * stock;
@@ -803,7 +939,7 @@ async function generatePortfolioReport(
         symbol:       ua.asset.symbol      ?? "",
         description:  ua.asset.description ?? "",
         stock,
-        costPerShare: Number(ua.costPerShare ?? 0),
+        costPerShare,
         costPrice,
         closePrice,
         closeValue,
@@ -1064,6 +1200,120 @@ export async function generateAllPortfoliosForDate(req: Request, res: Response) 
   } catch (error) {
     console.error("generateAllPortfoliosForDate error:", error);
     return res.status(500).json({ data: null, error: "Failed to generate reports for date" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/backfill-historical             */
+/*                                                                      */
+/*  Generates reports for a date range using AssetPriceHistory for     */
+/*  prices and the best available share-count source:                   */
+/*    1. PortfolioAssetDailyState (exact snapshot for that date)       */
+/*    2. Current stock + PortfolioRedemptionShareDelta reconstruction   */
+/*    3. Current live UserPortfolioAsset (fallback)                    */
+/*                                                                      */
+/*  Body: { startDate, endDate?, force? }                              */
+/*    startDate — ISO date string, e.g. "2025-01-01"                  */
+/*    endDate   — ISO date string (defaults to yesterday if omitted)   */
+/*    force     — if true, replace existing reports for those dates    */
+/* ------------------------------------------------------------------ */
+export async function backfillHistoricalReports(req: Request, res: Response) {
+  try {
+    const { startDate: startStr, endDate: endStr, force = false } = req.body as {
+      startDate?: string;
+      endDate?:   string;
+      force?:     boolean;
+    };
+
+    if (!startStr) {
+      return res.status(400).json({ data: null, error: "startDate is required (ISO string, e.g. '2025-01-01')" });
+    }
+
+    const parseUTCMidnight = (s: string) => {
+      const d = new Date(s);
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    };
+
+    const startDate = parseUTCMidnight(startStr);
+    // Default endDate to yesterday (we don't backfill today — the cron handles that)
+    const endDateRaw = endStr ? parseUTCMidnight(endStr) : (() => {
+      const y = new Date();
+      y.setUTCDate(y.getUTCDate() - 1);
+      y.setUTCHours(0, 0, 0, 0);
+      return y;
+    })();
+
+    if (startDate > endDateRaw) {
+      return res.status(400).json({ data: null, error: "startDate must be before or equal to endDate" });
+    }
+
+    // Collect all calendar dates in the range
+    const dates: Date[] = [];
+    for (const d = new Date(startDate); d <= endDateRaw; d.setUTCDate(d.getUTCDate() + 1)) {
+      dates.push(new Date(d));
+    }
+
+    const allPortfolios = await db.userPortfolio.findMany({
+      where:  { isActive: true },
+      select: { id: true, customName: true },
+    });
+
+    let totalReports = 0, success = 0, skipped = 0, failed = 0;
+    const errors: string[] = [];
+
+    for (const reportDate of dates) {
+      const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+      const dateStr = reportDate.toISOString().slice(0, 10);
+
+      const BATCH = 8;
+      for (let i = 0; i < allPortfolios.length; i += BATCH) {
+        const batch = allPortfolios.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map(async (p) => {
+            totalReports++;
+            // Skip if a report already exists for this date (unless force=true)
+            if (!force) {
+              const existing = await db.userPortfolioPerformanceReport.findFirst({
+                where: { userPortfolioId: p.id, reportDate: { gte: reportDate, lt: nextDay } },
+                select: { id: true },
+              });
+              if (existing) { skipped++; return "skipped"; }
+            }
+            // strict=false → falls back to live price if AssetPriceHistory is missing
+            const id = await generateAndSaveReport(p.id, reportDate, false);
+            if (!id) throw new Error("generate returned null");
+            return id;
+          })
+        );
+
+        results.forEach((r, j) => {
+          const name = batch[j].customName ?? batch[j].id;
+          if (r.status === "fulfilled") {
+            if (r.value !== "skipped") success++;
+          } else {
+            failed++;
+            errors.push(`[${dateStr}] ${name}: ${r.reason?.message ?? "unknown"}`);
+          }
+        });
+      }
+    }
+
+    return res.status(200).json({
+      data: {
+        dateRange:    `${startDate.toISOString().slice(0, 10)} → ${endDateRaw.toISOString().slice(0, 10)}`,
+        datesCount:   dates.length,
+        portfolios:   allPortfolios.length,
+        totalReports,
+        success,
+        skipped,
+        failed,
+        errors:       errors.slice(0, 50), // cap error list
+      },
+      error: null,
+    });
+  } catch (err: any) {
+    console.error("backfillHistoricalReports error:", err);
+    return res.status(500).json({ data: null, error: err?.message ?? "Backfill failed" });
   }
 }
 

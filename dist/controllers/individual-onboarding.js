@@ -15,6 +15,7 @@ exports.getIndividualOnboardingByUserId = getIndividualOnboardingByUserId;
 exports.validateTin = validateTin;
 exports.approveIndividualOnboarding = approveIndividualOnboarding;
 exports.updateIndividualOnboarding = updateIndividualOnboarding;
+exports.upsertIndividualOnboardingByUserId = upsertIndividualOnboardingByUserId;
 const db_1 = require("../db/db");
 function getUserId(req) {
     var _a;
@@ -359,75 +360,122 @@ function approveIndividualOnboarding(req, res) {
         }
     });
 }
+function buildIndividualOnboardingPatch(payload) {
+    const updateData = {};
+    const stringFields = [
+        "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
+        "countryOfResidence", "employmentStatus", "occupation", "companyName",
+        "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
+        "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
+        "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
+        "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
+    ];
+    if (payload.riskQuestionnaire !== undefined) {
+        updateData.riskQuestionnaire = payload.riskQuestionnaire;
+    }
+    if (payload.riskScore != null) {
+        updateData.riskScore = Number(payload.riskScore);
+    }
+    if (payload.advisorOverride !== undefined) {
+        updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+            ? true
+            : payload.advisorOverride === false || payload.advisorOverride === "false"
+                ? false
+                : null;
+    }
+    const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
+    const dateFields = ["dateOfBirth", "incorporationDate"];
+    const documentFields = [
+        "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
+        "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
+    ];
+    for (const field of stringFields) {
+        if (payload[field] !== undefined) {
+            updateData[field] = payload[field];
+        }
+    }
+    for (const field of booleanFields) {
+        if (payload[field] !== undefined) {
+            updateData[field] = payload[field];
+        }
+    }
+    for (const field of dateFields) {
+        if (payload[field]) {
+            updateData[field] = new Date(payload[field]);
+        }
+    }
+    for (const field of documentFields) {
+        if (payload[field] !== undefined) {
+            if (payload[field] === "") {
+                updateData[field] = null;
+            }
+            else if (payload[field]) {
+                updateData[field] = payload[field];
+            }
+        }
+    }
+    return updateData;
+}
 function updateIndividualOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const { id } = req.params;
         const payload = req.body;
+        const userIdFromBody = payload.userId;
         try {
-            const existing = yield db_1.db.individualOnboarding.findUnique({ where: { id } });
-            if (!existing)
+            let existing = yield db_1.db.individualOnboarding.findUnique({ where: { id } }).catch(() => null);
+            if (!existing && userIdFromBody) {
+                existing = yield db_1.db.individualOnboarding.findUnique({ where: { userId: userIdFromBody } });
+            }
+            if (!existing && !userIdFromBody) {
                 return res.status(404).json({ error: "Individual onboarding record not found." });
-            const updateData = {};
-            const stringFields = [
-                "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
-                "countryOfResidence", "employmentStatus", "occupation", "companyName",
-                "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
-                "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
-                "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
-                "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
-            ];
-            if (payload.riskQuestionnaire !== undefined) {
-                updateData.riskQuestionnaire = payload.riskQuestionnaire;
             }
-            if (payload.riskScore != null) {
-                updateData.riskScore = Number(payload.riskScore);
+            const updateData = buildIndividualOnboardingPatch(payload);
+            let updated;
+            if (existing) {
+                updated = yield db_1.db.individualOnboarding.update({
+                    where: { id: existing.id },
+                    data: updateData,
+                });
             }
-            if (payload.advisorOverride !== undefined) {
-                updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
-                    ? true
-                    : payload.advisorOverride === false || payload.advisorOverride === "false"
-                        ? false
-                        : null;
+            else {
+                updated = yield db_1.db.individualOnboarding.create({
+                    data: Object.assign(Object.assign({}, updateData), { userId: userIdFromBody, isApproved: false }),
+                });
             }
-            const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
-            const dateFields = ["dateOfBirth", "incorporationDate"];
-            const documentFields = [
-                "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
-                "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
-            ];
-            for (const field of stringFields) {
-                if (payload[field] !== undefined) {
-                    updateData[field] = payload[field];
-                }
-            }
-            for (const field of booleanFields) {
-                if (payload[field] !== undefined) {
-                    updateData[field] = payload[field];
-                }
-            }
-            for (const field of dateFields) {
-                if (payload[field]) {
-                    updateData[field] = new Date(payload[field]);
-                }
-            }
-            for (const field of documentFields) {
-                if (payload[field] !== undefined) {
-                    if (payload[field] === "") {
-                        updateData[field] = null;
-                    }
-                    else if (payload[field]) {
-                        updateData[field] = payload[field];
-                    }
-                }
-            }
-            const updated = yield db_1.db.individualOnboarding.update({
-                where: { id },
-                data: updateData,
-            });
             return res.status(200).json({ ok: true, data: updated });
         }
         catch (e) {
             console.error("updateIndividualOnboarding error:", e);
+            return res.status(500).json({ error: "Failed to update onboarding." });
+        }
+    });
+}
+function upsertIndividualOnboardingByUserId(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { userId } = req.params;
+        const payload = req.body;
+        try {
+            const existing = yield db_1.db.individualOnboarding.findUnique({
+                where: { userId },
+                select: { id: true },
+            });
+            const updateData = buildIndividualOnboardingPatch(payload);
+            let updated;
+            if (existing) {
+                updated = yield db_1.db.individualOnboarding.update({
+                    where: { id: existing.id },
+                    data: updateData,
+                });
+            }
+            else {
+                updated = yield db_1.db.individualOnboarding.create({
+                    data: Object.assign(Object.assign({}, updateData), { userId, isApproved: false }),
+                });
+            }
+            return res.status(200).json({ ok: true, data: updated });
+        }
+        catch (e) {
+            console.error("upsertIndividualOnboardingByUserId error:", e);
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });

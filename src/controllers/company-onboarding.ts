@@ -575,87 +575,165 @@ export async function approveCompanyOnboarding(req: Request, res: Response) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared: build the field patch map from an update payload.
+// Used by both update-by-id and upsert-by-userId handlers.
+// ---------------------------------------------------------------------------
+function buildCompanyOnboardingPatch(payload: Record<string, any>) {
+  const updateData: Prisma.CompanyOnboardingUpdateInput = {};
+
+  const stringFields = [
+    "companyName", "email", "companyAddress", "businessType",
+    "registrationNumber", "tin", "primaryGoal", "timeHorizon", "riskTolerance",
+    "investmentExperience", "sourceOfIncome", "expectedInvestment",
+    "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
+  ];
+
+  if (payload.riskQuestionnaire !== undefined) {
+    (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
+  }
+  if (payload.riskScore != null) {
+    (updateData as any).riskScore = Number(payload.riskScore);
+  }
+  if (payload.advisorOverride !== undefined) {
+    (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+      ? true
+      : payload.advisorOverride === false || payload.advisorOverride === "false"
+      ? false
+      : null;
+  }
+
+  const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
+
+  const dateFields = ["incorporationDate"];
+
+  const documentFields = [
+    "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
+    "constitutionUrl", "tradingLicenseUrl",
+    "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
+    "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
+  ];
+
+  for (const field of stringFields) {
+    if (payload[field] !== undefined) {
+      (updateData as any)[field] = payload[field];
+    }
+  }
+
+  for (const field of booleanFields) {
+    if (payload[field] !== undefined) {
+      (updateData as any)[field] = payload[field];
+    }
+  }
+
+  for (const field of dateFields) {
+    if (payload[field]) {
+      (updateData as any)[field] = new Date(payload[field]);
+    }
+  }
+
+  for (const field of documentFields) {
+    if (payload[field] !== undefined) {
+      if (payload[field] === "") {
+        (updateData as any)[field] = null;
+      } else if (payload[field]) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+  }
+
+  return updateData;
+}
+
+// ---------------------------------------------------------------------------
 // PATCH /onboarding/company/:id
 // Admin: Update company onboarding record fields.
+// Falls back to upsert-by-userId when the record id is missing/stale and a
+// userId is provided in the body.
 // ---------------------------------------------------------------------------
 export async function updateCompanyOnboarding(req: Request, res: Response) {
   const { id } = req.params;
   const payload = req.body as Record<string, any>;
+  const userIdFromBody = payload.userId;
 
   try {
-    const existing = await db.companyOnboarding.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: "Company onboarding record not found." });
+    let existing = await db.companyOnboarding.findUnique({ where: { id } }).catch(() => null);
 
-    const updateData: Prisma.CompanyOnboardingUpdateInput = {};
-
-    const stringFields = [
-      "companyName", "email", "companyAddress", "businessType",
-      "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
-      "investmentExperience", "sourceOfIncome", "expectedInvestment",
-      "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
-    ];
-
-    if (payload.riskQuestionnaire !== undefined) {
-      (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
-    }
-    if (payload.riskScore != null) {
-      (updateData as any).riskScore = Number(payload.riskScore);
-    }
-    if (payload.advisorOverride !== undefined) {
-      (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
-        ? true
-        : payload.advisorOverride === false || payload.advisorOverride === "false"
-        ? false
-        : null;
+    if (!existing && userIdFromBody) {
+      existing = await db.companyOnboarding.findUnique({ where: { userId: userIdFromBody } });
     }
 
-    const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
-
-    const dateFields = ["incorporationDate"];
-
-    const documentFields = [
-      "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
-      "constitutionUrl", "tradingLicenseUrl",
-      "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
-      "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
-    ];
-
-    for (const field of stringFields) {
-      if (payload[field] !== undefined) {
-        (updateData as any)[field] = payload[field];
-      }
+    if (!existing && !userIdFromBody) {
+      return res.status(404).json({ error: "Company onboarding record not found." });
     }
 
-    for (const field of booleanFields) {
-      if (payload[field] !== undefined) {
-        (updateData as any)[field] = payload[field];
-      }
-    }
+    const updateData = buildCompanyOnboardingPatch(payload);
 
-    for (const field of dateFields) {
-      if (payload[field]) {
-        (updateData as any)[field] = new Date(payload[field]);
-      }
+    let updated: any;
+    if (existing) {
+      updated = await db.companyOnboarding.update({
+        where: { id: existing.id },
+        data: updateData,
+      });
+    } else {
+      updated = await db.companyOnboarding.create({
+        data: {
+          ...(updateData as any),
+          userId: userIdFromBody,
+          isApproved: false,
+          companyName: updateData.companyName || "Unnamed Company",
+          email: updateData.email || "",
+          companyType: (updateData as any).companyType || "LIMITED",
+          phoneNumbers: (updateData as any).phoneNumbers || [],
+        },
+      });
     }
-
-    for (const field of documentFields) {
-      if (payload[field] !== undefined) {
-        if (payload[field] === "") {
-          (updateData as any)[field] = null;
-        } else if (payload[field]) {
-          (updateData as any)[field] = payload[field];
-        }
-      }
-    }
-
-    const updated = await db.companyOnboarding.update({
-      where: { id },
-      data: updateData,
-    });
 
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("updateCompanyOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to update onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/company/user/:userId
+// Admin: Create or update company onboarding by userId (no record id needed).
+// ---------------------------------------------------------------------------
+export async function upsertCompanyOnboardingByUserId(req: Request, res: Response) {
+  const { userId } = req.params;
+  const payload = req.body as Record<string, any>;
+
+  try {
+    const existing = await db.companyOnboarding.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+
+    const updateData = buildCompanyOnboardingPatch(payload);
+
+    let updated: any;
+    if (existing) {
+      updated = await db.companyOnboarding.update({
+        where: { id: existing.id },
+        data: updateData,
+      });
+    } else {
+      updated = await db.companyOnboarding.create({
+        data: {
+          ...(updateData as any),
+          userId,
+          isApproved: false,
+          companyName: updateData.companyName || "Unnamed Company",
+          email: updateData.email || "",
+          companyType: (updateData as any).companyType || "LIMITED",
+          phoneNumbers: (updateData as any).phoneNumbers || [],
+        },
+      });
+    }
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("upsertCompanyOnboardingByUserId error:", e);
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }

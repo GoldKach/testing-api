@@ -13,6 +13,7 @@ exports.generateAndSaveReport = generateAndSaveReport;
 exports.generateDailyReportsForAllPortfolios = generateDailyReportsForAllPortfolios;
 exports.regenerateDailyReportsForAllPortfolios = regenerateDailyReportsForAllPortfolios;
 exports.generateAllPortfoliosForDate = generateAllPortfoliosForDate;
+exports.backfillHistoricalReports = backfillHistoricalReports;
 exports.generatePerformanceReport = generatePerformanceReport;
 exports.generateUserPerformanceReports = generateUserPerformanceReports;
 exports.generateAllPerformanceReports = generateAllPerformanceReports;
@@ -43,6 +44,75 @@ function determineAssetClass(asset) {
     if (symbol === "cash" || description === "cash" || symbol === "usd")
         return "CASH";
     return "EQUITIES";
+}
+function resolveHistoricalStocks(userPortfolioId, userAssets, targetDateUTC) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
+        const result = new Map();
+        const assetIds = userAssets.map((ua) => ua.assetId);
+        const dailyRows = yield db_1.db.portfolioAssetDailyState.findMany({
+            where: {
+                userPortfolioId,
+                assetId: { in: assetIds },
+                snapshotDate: { lte: targetDateUTC },
+            },
+            orderBy: { snapshotDate: "desc" },
+        });
+        const snapshotMap = new Map();
+        for (const row of dailyRows) {
+            if (!snapshotMap.has(row.assetId))
+                snapshotMap.set(row.assetId, row);
+        }
+        if (snapshotMap.size === assetIds.length) {
+            for (const ua of userAssets) {
+                const snap = snapshotMap.get(ua.assetId);
+                result.set(ua.assetId, {
+                    stock: Number(snap.stock),
+                    costPerShare: Number(snap.costPerShare),
+                    costPrice: Number(snap.costPrice),
+                    allocationPercentage: Number(snap.allocationPercentage),
+                    source: "daily-snapshot",
+                });
+            }
+            return result;
+        }
+        const deltas = yield db_1.db.portfolioRedemptionShareDelta.findMany({
+            where: {
+                userPortfolioId,
+                assetId: { in: assetIds },
+                redemptionDate: { gt: targetDateUTC },
+            },
+        });
+        const redeemedAfter = new Map();
+        for (const d of deltas) {
+            redeemedAfter.set(d.assetId, ((_a = redeemedAfter.get(d.assetId)) !== null && _a !== void 0 ? _a : 0) + Number(d.sharesRedeemed));
+        }
+        const hasDeltaData = deltas.length > 0;
+        for (const ua of userAssets) {
+            if (snapshotMap.has(ua.assetId)) {
+                const snap = snapshotMap.get(ua.assetId);
+                result.set(ua.assetId, {
+                    stock: Number(snap.stock),
+                    costPerShare: Number(snap.costPerShare),
+                    costPrice: Number(snap.costPrice),
+                    allocationPercentage: Number(snap.allocationPercentage),
+                    source: "daily-snapshot",
+                });
+                continue;
+            }
+            const extraShares = (_b = redeemedAfter.get(ua.assetId)) !== null && _b !== void 0 ? _b : 0;
+            const reconstructedStock = Math.max(0, Number(ua.stock) + extraShares);
+            const reconstructedCostPrice = reconstructedStock * Number(ua.costPerShare);
+            result.set(ua.assetId, {
+                stock: reconstructedStock,
+                costPerShare: Number(ua.costPerShare),
+                costPrice: reconstructedCostPrice,
+                allocationPercentage: Number(ua.allocationPercentage),
+                source: hasDeltaData ? "delta-reconstruction" : "live",
+            });
+        }
+        return result;
+    });
 }
 function generatePortfolioReport(userPortfolioId_1) {
     return __awaiter(this, arguments, void 0, function* (userPortfolioId, reportDate = new Date(), strict = true) {
@@ -113,6 +183,12 @@ function generatePortfolioReport(userPortfolioId_1) {
             if (strict !== false && missingAssets.length > 0) {
                 throw new report_errors_1.MissingHistoryPricesError(missingAssets, reportDateStr);
             }
+            const todayUTC = new Date();
+            todayUTC.setUTCHours(0, 0, 0, 0);
+            const isHistorical = reportDateUTC.getTime() < todayUTC.getTime();
+            const historicalStockMap = isHistorical
+                ? yield resolveHistoricalStocks(userPortfolioId, userPortfolio.userAssets, reportDateUTC)
+                : null;
             let totalCostPrice = 0;
             let totalCloseValue = 0;
             let totalLossGain = 0;
@@ -120,8 +196,9 @@ function generatePortfolioReport(userPortfolioId_1) {
             const classMap = new Map();
             ALL_CLASSES.forEach((c) => classMap.set(c, { holdings: 0, totalCashValue: 0 }));
             for (const ua of userPortfolio.userAssets) {
-                const costPrice = Number((_g = ua.costPrice) !== null && _g !== void 0 ? _g : 0);
-                const stock = Number((_h = ua.stock) !== null && _h !== void 0 ? _h : 0);
+                const resolved = historicalStockMap === null || historicalStockMap === void 0 ? void 0 : historicalStockMap.get(ua.assetId);
+                const stock = resolved ? resolved.stock : Number((_g = ua.stock) !== null && _g !== void 0 ? _g : 0);
+                const costPrice = resolved ? resolved.costPrice : Number((_h = ua.costPrice) !== null && _h !== void 0 ? _h : 0);
                 const histPrice = historicalPriceMap.get(ua.assetId);
                 const closePrice = histPrice !== undefined ? histPrice : Number((_j = ua.asset.closePrice) !== null && _j !== void 0 ? _j : 0);
                 const closeValue = closePrice * stock;
@@ -156,7 +233,10 @@ function generatePortfolioReport(userPortfolioId_1) {
             });
             const totalPercentage = totalCostPrice > 0 ? (totalLossGain / totalCostPrice) * 100 : 0;
             const netAssetValue = totalCloseValue - totalFees;
-            const subPortfolioSnapshots = userPortfolio.subPortfolios.map((sub) => ({
+            const relevantSubPortfolios = isHistorical
+                ? userPortfolio.subPortfolios.filter((sub) => new Date(sub.snapshotDate).getTime() <= reportDateUTC.getTime())
+                : userPortfolio.subPortfolios;
+            const subPortfolioSnapshots = relevantSubPortfolios.map((sub) => ({
                 subPortfolioId: sub.id,
                 generation: sub.generation,
                 label: sub.label,
@@ -169,17 +249,19 @@ function generatePortfolioReport(userPortfolioId_1) {
             }));
             const assetSnapshots = userPortfolio.userAssets.map((ua) => {
                 var _a, _b, _c, _e, _f, _g;
-                const stock = Number((_a = ua.stock) !== null && _a !== void 0 ? _a : 0);
-                const costPrice = Number((_b = ua.costPrice) !== null && _b !== void 0 ? _b : 0);
+                const resolved = historicalStockMap === null || historicalStockMap === void 0 ? void 0 : historicalStockMap.get(ua.assetId);
+                const stock = resolved ? resolved.stock : Number((_a = ua.stock) !== null && _a !== void 0 ? _a : 0);
+                const costPrice = resolved ? resolved.costPrice : Number((_b = ua.costPrice) !== null && _b !== void 0 ? _b : 0);
+                const costPerShare = resolved ? resolved.costPerShare : Number((_c = ua.costPerShare) !== null && _c !== void 0 ? _c : 0);
                 const histPrice = historicalPriceMap.get(ua.assetId);
-                const closePrice = histPrice !== undefined ? histPrice : Number((_c = ua.asset.closePrice) !== null && _c !== void 0 ? _c : 0);
+                const closePrice = histPrice !== undefined ? histPrice : Number((_e = ua.asset.closePrice) !== null && _e !== void 0 ? _e : 0);
                 const closeValue = closePrice * stock;
                 return {
                     assetId: ua.assetId,
-                    symbol: (_e = ua.asset.symbol) !== null && _e !== void 0 ? _e : "",
-                    description: (_f = ua.asset.description) !== null && _f !== void 0 ? _f : "",
+                    symbol: (_f = ua.asset.symbol) !== null && _f !== void 0 ? _f : "",
+                    description: (_g = ua.asset.description) !== null && _g !== void 0 ? _g : "",
                     stock,
-                    costPerShare: Number((_g = ua.costPerShare) !== null && _g !== void 0 ? _g : 0),
+                    costPerShare,
                     costPrice,
                     closePrice,
                     closeValue,
@@ -400,6 +482,95 @@ function generateAllPortfoliosForDate(req, res) {
         catch (error) {
             console.error("generateAllPortfoliosForDate error:", error);
             return res.status(500).json({ data: null, error: "Failed to generate reports for date" });
+        }
+    });
+}
+function backfillHistoricalReports(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        try {
+            const { startDate: startStr, endDate: endStr, force = false } = req.body;
+            if (!startStr) {
+                return res.status(400).json({ data: null, error: "startDate is required (ISO string, e.g. '2025-01-01')" });
+            }
+            const parseUTCMidnight = (s) => {
+                const d = new Date(s);
+                return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+            };
+            const startDate = parseUTCMidnight(startStr);
+            const endDateRaw = endStr ? parseUTCMidnight(endStr) : (() => {
+                const y = new Date();
+                y.setUTCDate(y.getUTCDate() - 1);
+                y.setUTCHours(0, 0, 0, 0);
+                return y;
+            })();
+            if (startDate > endDateRaw) {
+                return res.status(400).json({ data: null, error: "startDate must be before or equal to endDate" });
+            }
+            const dates = [];
+            for (const d = new Date(startDate); d <= endDateRaw; d.setUTCDate(d.getUTCDate() + 1)) {
+                dates.push(new Date(d));
+            }
+            const allPortfolios = yield db_1.db.userPortfolio.findMany({
+                where: { isActive: true },
+                select: { id: true, customName: true },
+            });
+            let totalReports = 0, success = 0, skipped = 0, failed = 0;
+            const errors = [];
+            for (const reportDate of dates) {
+                const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+                const dateStr = reportDate.toISOString().slice(0, 10);
+                const BATCH = 8;
+                for (let i = 0; i < allPortfolios.length; i += BATCH) {
+                    const batch = allPortfolios.slice(i, i + BATCH);
+                    const results = yield Promise.allSettled(batch.map((p) => __awaiter(this, void 0, void 0, function* () {
+                        totalReports++;
+                        if (!force) {
+                            const existing = yield db_1.db.userPortfolioPerformanceReport.findFirst({
+                                where: { userPortfolioId: p.id, reportDate: { gte: reportDate, lt: nextDay } },
+                                select: { id: true },
+                            });
+                            if (existing) {
+                                skipped++;
+                                return "skipped";
+                            }
+                        }
+                        const id = yield generateAndSaveReport(p.id, reportDate, false);
+                        if (!id)
+                            throw new Error("generate returned null");
+                        return id;
+                    })));
+                    results.forEach((r, j) => {
+                        var _a, _b, _c;
+                        const name = (_a = batch[j].customName) !== null && _a !== void 0 ? _a : batch[j].id;
+                        if (r.status === "fulfilled") {
+                            if (r.value !== "skipped")
+                                success++;
+                        }
+                        else {
+                            failed++;
+                            errors.push(`[${dateStr}] ${name}: ${(_c = (_b = r.reason) === null || _b === void 0 ? void 0 : _b.message) !== null && _c !== void 0 ? _c : "unknown"}`);
+                        }
+                    });
+                }
+            }
+            return res.status(200).json({
+                data: {
+                    dateRange: `${startDate.toISOString().slice(0, 10)} → ${endDateRaw.toISOString().slice(0, 10)}`,
+                    datesCount: dates.length,
+                    portfolios: allPortfolios.length,
+                    totalReports,
+                    success,
+                    skipped,
+                    failed,
+                    errors: errors.slice(0, 50),
+                },
+                error: null,
+            });
+        }
+        catch (err) {
+            console.error("backfillHistoricalReports error:", err);
+            return res.status(500).json({ data: null, error: (_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : "Backfill failed" });
         }
     });
 }

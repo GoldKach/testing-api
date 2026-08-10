@@ -18,6 +18,7 @@ exports.getCompanyDirectors = getCompanyDirectors;
 exports.getCompanyUBOs = getCompanyUBOs;
 exports.approveCompanyOnboarding = approveCompanyOnboarding;
 exports.updateCompanyOnboarding = updateCompanyOnboarding;
+exports.upsertCompanyOnboardingByUserId = upsertCompanyOnboardingByUserId;
 const db_1 = require("../db/db");
 function getUserId(req) {
     var _a;
@@ -501,75 +502,122 @@ function approveCompanyOnboarding(req, res) {
         }
     });
 }
+function buildCompanyOnboardingPatch(payload) {
+    const updateData = {};
+    const stringFields = [
+        "companyName", "email", "companyAddress", "businessType",
+        "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
+        "investmentExperience", "sourceOfIncome", "expectedInvestment",
+        "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
+    ];
+    if (payload.riskQuestionnaire !== undefined) {
+        updateData.riskQuestionnaire = payload.riskQuestionnaire;
+    }
+    if (payload.riskScore != null) {
+        updateData.riskScore = Number(payload.riskScore);
+    }
+    if (payload.advisorOverride !== undefined) {
+        updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+            ? true
+            : payload.advisorOverride === false || payload.advisorOverride === "false"
+                ? false
+                : null;
+    }
+    const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
+    const dateFields = ["incorporationDate"];
+    const documentFields = [
+        "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
+        "constitutionUrl", "tradingLicenseUrl",
+        "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
+        "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
+    ];
+    for (const field of stringFields) {
+        if (payload[field] !== undefined) {
+            updateData[field] = payload[field];
+        }
+    }
+    for (const field of booleanFields) {
+        if (payload[field] !== undefined) {
+            updateData[field] = payload[field];
+        }
+    }
+    for (const field of dateFields) {
+        if (payload[field]) {
+            updateData[field] = new Date(payload[field]);
+        }
+    }
+    for (const field of documentFields) {
+        if (payload[field] !== undefined) {
+            if (payload[field] === "") {
+                updateData[field] = null;
+            }
+            else if (payload[field]) {
+                updateData[field] = payload[field];
+            }
+        }
+    }
+    return updateData;
+}
 function updateCompanyOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const { id } = req.params;
         const payload = req.body;
+        const userIdFromBody = payload.userId;
         try {
-            const existing = yield db_1.db.companyOnboarding.findUnique({ where: { id } });
-            if (!existing)
+            let existing = yield db_1.db.companyOnboarding.findUnique({ where: { id } }).catch(() => null);
+            if (!existing && userIdFromBody) {
+                existing = yield db_1.db.companyOnboarding.findUnique({ where: { userId: userIdFromBody } });
+            }
+            if (!existing && !userIdFromBody) {
                 return res.status(404).json({ error: "Company onboarding record not found." });
-            const updateData = {};
-            const stringFields = [
-                "companyName", "email", "companyAddress", "businessType",
-                "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
-                "investmentExperience", "sourceOfIncome", "expectedInvestment",
-                "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
-            ];
-            if (payload.riskQuestionnaire !== undefined) {
-                updateData.riskQuestionnaire = payload.riskQuestionnaire;
             }
-            if (payload.riskScore != null) {
-                updateData.riskScore = Number(payload.riskScore);
+            const updateData = buildCompanyOnboardingPatch(payload);
+            let updated;
+            if (existing) {
+                updated = yield db_1.db.companyOnboarding.update({
+                    where: { id: existing.id },
+                    data: updateData,
+                });
             }
-            if (payload.advisorOverride !== undefined) {
-                updateData.advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
-                    ? true
-                    : payload.advisorOverride === false || payload.advisorOverride === "false"
-                        ? false
-                        : null;
+            else {
+                updated = yield db_1.db.companyOnboarding.create({
+                    data: Object.assign(Object.assign({}, updateData), { userId: userIdFromBody, isApproved: false, companyName: updateData.companyName || "Unnamed Company", email: updateData.email || "", companyType: updateData.companyType || "LIMITED", phoneNumbers: updateData.phoneNumbers || [] }),
+                });
             }
-            const booleanFields = ["isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
-            const dateFields = ["incorporationDate"];
-            const documentFields = [
-                "bankStatementUrl", "tinCertificateUrl", "logoDocUrl",
-                "constitutionUrl", "tradingLicenseUrl",
-                "certificateOfIncorporationUrl", "memorandumUrl", "articlesUrl",
-                "signatureUrl", "additionalDocumentUrl", "proofOfAddressUrl"
-            ];
-            for (const field of stringFields) {
-                if (payload[field] !== undefined) {
-                    updateData[field] = payload[field];
-                }
-            }
-            for (const field of booleanFields) {
-                if (payload[field] !== undefined) {
-                    updateData[field] = payload[field];
-                }
-            }
-            for (const field of dateFields) {
-                if (payload[field]) {
-                    updateData[field] = new Date(payload[field]);
-                }
-            }
-            for (const field of documentFields) {
-                if (payload[field] !== undefined) {
-                    if (payload[field] === "") {
-                        updateData[field] = null;
-                    }
-                    else if (payload[field]) {
-                        updateData[field] = payload[field];
-                    }
-                }
-            }
-            const updated = yield db_1.db.companyOnboarding.update({
-                where: { id },
-                data: updateData,
-            });
             return res.status(200).json({ ok: true, data: updated });
         }
         catch (e) {
             console.error("updateCompanyOnboarding error:", e);
+            return res.status(500).json({ error: "Failed to update onboarding." });
+        }
+    });
+}
+function upsertCompanyOnboardingByUserId(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { userId } = req.params;
+        const payload = req.body;
+        try {
+            const existing = yield db_1.db.companyOnboarding.findUnique({
+                where: { userId },
+                select: { id: true },
+            });
+            const updateData = buildCompanyOnboardingPatch(payload);
+            let updated;
+            if (existing) {
+                updated = yield db_1.db.companyOnboarding.update({
+                    where: { id: existing.id },
+                    data: updateData,
+                });
+            }
+            else {
+                updated = yield db_1.db.companyOnboarding.create({
+                    data: Object.assign(Object.assign({}, updateData), { userId, isApproved: false, companyName: updateData.companyName || "Unnamed Company", email: updateData.email || "", companyType: updateData.companyType || "LIMITED", phoneNumbers: updateData.phoneNumbers || [] }),
+                });
+            }
+            return res.status(200).json({ ok: true, data: updated });
+        }
+        catch (e) {
+            console.error("upsertCompanyOnboardingByUserId error:", e);
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });

@@ -411,87 +411,150 @@ export async function approveIndividualOnboarding(req: Request, res: Response) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared: build the field patch map from an update payload.
+// Used by both update-by-id and upsert-by-userId handlers.
+// ---------------------------------------------------------------------------
+function buildIndividualOnboardingPatch(payload: Record<string, any>) {
+  const updateData: Prisma.IndividualOnboardingUpdateInput = {};
+
+  const stringFields = [
+    "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
+    "countryOfResidence", "employmentStatus", "occupation", "companyName",
+    "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
+    "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
+    "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
+    "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
+  ];
+
+  if (payload.riskQuestionnaire !== undefined) {
+    (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
+  }
+  if (payload.riskScore != null) {
+    (updateData as any).riskScore = Number(payload.riskScore);
+  }
+  if (payload.advisorOverride !== undefined) {
+    (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
+      ? true
+      : payload.advisorOverride === false || payload.advisorOverride === "false"
+      ? false
+      : null;
+  }
+
+  const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
+
+  const dateFields = ["dateOfBirth", "incorporationDate"];
+
+  const documentFields = [
+    "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
+    "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
+  ];
+
+  for (const field of stringFields) {
+    if (payload[field] !== undefined) {
+      (updateData as any)[field] = payload[field];
+    }
+  }
+
+  for (const field of booleanFields) {
+    if (payload[field] !== undefined) {
+      (updateData as any)[field] = payload[field];
+    }
+  }
+
+  for (const field of dateFields) {
+    if (payload[field]) {
+      (updateData as any)[field] = new Date(payload[field]);
+    }
+  }
+
+  for (const field of documentFields) {
+    if (payload[field] !== undefined) {
+      if (payload[field] === "") {
+        (updateData as any)[field] = null;
+      } else if (payload[field]) {
+        (updateData as any)[field] = payload[field];
+      }
+    }
+  }
+
+  return updateData;
+}
+
+// ---------------------------------------------------------------------------
 // PATCH /onboarding/individual/:id
 // Admin: Update individual onboarding record fields.
+// Falls back to upsert-by-userId when the record id is missing/stale and a
+// userId is provided in the body, so staff can create/update onboarding for
+// clients who have not submitted (or not been approved on) a record yet.
 // ---------------------------------------------------------------------------
 export async function updateIndividualOnboarding(req: Request, res: Response) {
   const { id } = req.params;
   const payload = req.body as Record<string, any>;
+  const userIdFromBody = payload.userId;
 
   try {
-    const existing = await db.individualOnboarding.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: "Individual onboarding record not found." });
+    let existing = await db.individualOnboarding.findUnique({ where: { id } }).catch(() => null);
 
-    const updateData: Prisma.IndividualOnboardingUpdateInput = {};
-
-    const stringFields = [
-      "fullName", "tin", "email", "phoneNumber", "homeAddress", "nationality",
-      "countryOfResidence", "employmentStatus", "occupation", "companyName",
-      "primaryGoal", "timeHorizon", "riskTolerance", "investmentExperience",
-      "sourceOfIncome", "employmentIncome", "expectedInvestment", "businessOwnership",
-      "publicPosition", "relationshipToCountry", "familyMemberDetails", "sanctionsOrLegal",
-      "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
-    ];
-
-    if (payload.riskQuestionnaire !== undefined) {
-      (updateData as any).riskQuestionnaire = payload.riskQuestionnaire;
-    }
-    if (payload.riskScore != null) {
-      (updateData as any).riskScore = Number(payload.riskScore);
-    }
-    if (payload.advisorOverride !== undefined) {
-      (updateData as any).advisorOverride = payload.advisorOverride === true || payload.advisorOverride === "true"
-        ? true
-        : payload.advisorOverride === false || payload.advisorOverride === "false"
-        ? false
-        : null;
+    if (!existing && userIdFromBody) {
+      existing = await db.individualOnboarding.findUnique({ where: { userId: userIdFromBody } });
     }
 
-    const booleanFields = ["hasBusiness", "isPEP", "consentToDataCollection", "agreeToTerms", "consentConfirmed"];
-
-    const dateFields = ["dateOfBirth", "incorporationDate"];
-
-    const documentFields = [
-      "nationalIdUrl", "passportPhotoUrl", "tinCertificateUrl",
-      "bankStatementUrl", "proofOfAddressUrl", "signatureUrl", "additionalDocumentUrl"
-    ];
-
-    for (const field of stringFields) {
-      if (payload[field] !== undefined) {
-        (updateData as any)[field] = payload[field];
-      }
+    if (!existing && !userIdFromBody) {
+      return res.status(404).json({ error: "Individual onboarding record not found." });
     }
 
-    for (const field of booleanFields) {
-      if (payload[field] !== undefined) {
-        (updateData as any)[field] = payload[field];
-      }
-    }
+    const updateData = buildIndividualOnboardingPatch(payload);
 
-    for (const field of dateFields) {
-      if (payload[field]) {
-        (updateData as any)[field] = new Date(payload[field]);
-      }
+    let updated: any;
+    if (existing) {
+      updated = await db.individualOnboarding.update({
+        where: { id: existing.id },
+        data: updateData,
+      });
+    } else {
+      updated = await db.individualOnboarding.create({
+        data: { ...(updateData as any), userId: userIdFromBody, isApproved: false },
+      });
     }
-
-    for (const field of documentFields) {
-      if (payload[field] !== undefined) {
-        if (payload[field] === "") {
-          (updateData as any)[field] = null;
-        } else if (payload[field]) {
-          (updateData as any)[field] = payload[field];
-        }
-      }
-    }
-
-    const updated = await db.individualOnboarding.update({
-      where: { id },
-      data: updateData,
-    });
 
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("updateIndividualOnboarding error:", e);
+    return res.status(500).json({ error: "Failed to update onboarding." });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /onboarding/individual/user/:userId
+// Admin: Create or update individual onboarding by userId (no record id needed).
+// ---------------------------------------------------------------------------
+export async function upsertIndividualOnboardingByUserId(req: Request, res: Response) {
+  const { userId } = req.params;
+  const payload = req.body as Record<string, any>;
+
+  try {
+    const existing = await db.individualOnboarding.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+
+    const updateData = buildIndividualOnboardingPatch(payload);
+
+    let updated: any;
+    if (existing) {
+      updated = await db.individualOnboarding.update({
+        where: { id: existing.id },
+        data: updateData,
+      });
+    } else {
+      updated = await db.individualOnboarding.create({
+        data: { ...(updateData as any), userId, isApproved: false },
+      });
+    }
+
+    return res.status(200).json({ ok: true, data: updated });
+  } catch (e) {
+    console.error("upsertIndividualOnboardingByUserId error:", e);
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }

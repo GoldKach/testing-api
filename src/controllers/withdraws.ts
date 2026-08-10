@@ -606,6 +606,26 @@ export async function approveWithdrawal(req: Request, res: Response) {
         });
       }
 
+      // ── 2b. Write per-asset share deltas for historical report reconstruction ──
+      // These let the report generator add back redeemed shares when generating
+      // reports for dates BEFORE this redemption occurred.
+      await tx.portfolioRedemptionShareDelta.createMany({
+        data: assetResults.map((r) => {
+          const ua = up.userAssets.find((u) => u.assetId === r.assetId)!;
+          return {
+            userPortfolioId:  existing.userPortfolioId!,
+            withdrawalId:     id,
+            assetId:          r.assetId,
+            sharesRedeemed:   r.snap.stock,           // shares sold
+            priceAtRedemption: r.snap.closePrice,     // admin close price used
+            stockBefore:      Number(ua.stock),       // share count before this redemption
+            stockAfter:       r.x2.stock,             // share count after
+            redemptionDate:   approvalDate,
+          };
+        }),
+        skipDuplicates: true,
+      });
+
       // ── 3. Update UserPortfolio totals ─────────────────────────────────────
       // totalInvested is NOT updated — cost basis is unchanged on redemption.
       // portfolioValue shrinks because fewer shares are held at market price.

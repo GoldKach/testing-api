@@ -12,6 +12,67 @@ import { recordAssetPriceHistory } from "@/utils/cascade";
 const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------------ */
+/*  Snapshot portfolio asset positions (share counts) for today        */
+/*  Called BEFORE report generation so reports can always reconstruct  */
+/*  historical holdings even after future top-ups or redemptions.      */
+/* ------------------------------------------------------------------ */
+
+export async function snapshotPortfolioAssetStates(snapshotDate?: Date) {
+  const dateUTC = snapshotDate ? new Date(snapshotDate) : new Date();
+  dateUTC.setUTCHours(0, 0, 0, 0);
+
+  const portfolios = await db.userPortfolio.findMany({
+    where:  { isActive: true },
+    select: {
+      id:         true,
+      userAssets: {
+        select: {
+          assetId:              true,
+          stock:                true,
+          costPerShare:         true,
+          costPrice:            true,
+          allocationPercentage: true,
+        },
+      },
+    },
+  });
+
+  let written = 0;
+  for (const p of portfolios) {
+    if (!(p as any).userAssets?.length) continue;
+    for (const ua of (p as any).userAssets) {
+      await db.portfolioAssetDailyState.upsert({
+        where: {
+          userPortfolioId_assetId_snapshotDate: {
+            userPortfolioId: p.id,
+            assetId:         ua.assetId,
+            snapshotDate:    dateUTC,
+          },
+        },
+        update: {
+          stock:                ua.stock,
+          costPerShare:         ua.costPerShare,
+          costPrice:            ua.costPrice,
+          allocationPercentage: ua.allocationPercentage,
+        },
+        create: {
+          userPortfolioId:      p.id,
+          assetId:              ua.assetId,
+          snapshotDate:         dateUTC,
+          stock:                ua.stock,
+          costPerShare:         ua.costPerShare,
+          costPrice:            ua.costPrice,
+          allocationPercentage: ua.allocationPercentage,
+        },
+      });
+      written++;
+    }
+  }
+
+  console.log(`   [portfolio-state-snapshot] Wrote ${written} position(s) for ${dateUTC.toISOString().slice(0, 10)}`);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Internal executor — system-wide (all active portfolios)            */
 /* ------------------------------------------------------------------ */
 
@@ -95,6 +156,7 @@ export async function executeUserPortfolioReportJob(userId: string) {
   console.log("============================================================");
 
   try {
+    await snapshotPortfolioAssetStates();
     const result = await generateDailyReportsForUser(userId);
 
     console.log("");
@@ -213,6 +275,8 @@ export function scheduleDailyPortfolioReports() {
     console.log("📸 Step 1 — Snapshotting live prices for today (11 AM EAT)");
     console.log("============================================================");
     await snapshotLivePricesForToday();
+    console.log("📸 Step 2 — Snapshotting portfolio asset positions for today");
+    await snapshotPortfolioAssetStates();
     await executePortfolioReportJob("DAILY");
   });
 }
@@ -284,6 +348,8 @@ export function schedule530PMEATDailyRegen() {
     console.log("📸 Step 1 — Snapshotting live prices for today (5:30 PM EAT)");
     console.log("============================================================");
     await snapshotLivePricesForToday();
+    console.log("📸 Step 2 — Snapshotting portfolio asset positions for today");
+    await snapshotPortfolioAssetStates();
     await executeRegenReportJob("530PM-EAT-REGEN");
   });
 }

@@ -496,6 +496,9 @@ model Withdrawal {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
+  // Share-level audit trail for each redemption (one row per asset per redemption)
+  redemptionShareDeltas PortfolioRedemptionShareDelta[]
+
   @@index([userId])
   @@index([createdById])
   @@index([userPortfolioId])
@@ -518,6 +521,8 @@ model Asset {
   userPortfolioAssets UserPortfolioAsset[]
   subPortfolioAssets  SubPortfolioAsset[]
   priceHistory        AssetPriceHistory[]
+  dailyStateSnapshots PortfolioAssetDailyState[]
+  redemptionDeltas    PortfolioRedemptionShareDelta[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -617,6 +622,12 @@ model UserPortfolio {
 
   // Performance reports
   performanceReports UserPortfolioPerformanceReport[]
+
+  // Daily snapshots of asset positions (share counts) for historical report reconstruction
+  assetDailyStates PortfolioAssetDailyState[]
+
+  // Per-asset share deltas written every time a redemption is approved
+  redemptionShareDeltas PortfolioRedemptionShareDelta[]
 
   @@unique([userId, portfolioId, customName])
   @@index([userId])
@@ -909,7 +920,63 @@ model SubPortfolioReportSnapshot {
   @@index([reportId])
 }
 
+// =====================
+// Portfolio Historical State (Path 2)
+// =====================
 
+// Written nightly by the cron BEFORE generating reports.
+// Records the exact share counts and cost basis for every asset in every
+// active portfolio so that historical reports can be reconstructed accurately
+// even after future top-ups or redemptions change the live UserPortfolioAsset rows.
+model PortfolioAssetDailyState {
+  id              String        @id @default(cuid())
+  userPortfolioId String
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  assetId         String
+  asset           Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  snapshotDate         DateTime // UTC midnight of the calendar date
+  stock                Float    @default(0)
+  costPerShare         Float    @default(0)
+  costPrice            Float    @default(0)
+  allocationPercentage Float    @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userPortfolioId, assetId, snapshotDate])
+  @@index([userPortfolioId, snapshotDate])
+  @@index([assetId, snapshotDate])
+}
+
+// =====================
+// Redemption Share Deltas (Path 3)
+// =====================
+
+// Written inside the redemption-approval transaction, one row per asset.
+// Records exactly how many shares were sold and what the stock was before/after.
+// Used to reconstruct a portfolio's historical share counts for any date before
+// this redemption: historicalStock = currentStock + SUM(sharesRedeemed WHERE redemptionDate > targetDate)
+model PortfolioRedemptionShareDelta {
+  id              String        @id @default(cuid())
+  userPortfolioId String
+  userPortfolio   UserPortfolio @relation(fields: [userPortfolioId], references: [id], onDelete: Cascade)
+  withdrawalId    String
+  withdrawal      Withdrawal    @relation(fields: [withdrawalId], references: [id], onDelete: Cascade)
+  assetId         String
+  asset           Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  sharesRedeemed    Float    // shares removed from UserPortfolioAsset.stock
+  priceAtRedemption Float    // admin-supplied close price used at approval time
+  stockBefore       Float    // UserPortfolioAsset.stock before this redemption
+  stockAfter        Float    // UserPortfolioAsset.stock after this redemption
+  redemptionDate    DateTime // approvalDate of the withdrawal
+
+  createdAt DateTime @default(now())
+
+  @@index([userPortfolioId, redemptionDate])
+  @@index([withdrawalId])
+  @@index([assetId])
+}
 
 enum CompanyType {
   LIMITED

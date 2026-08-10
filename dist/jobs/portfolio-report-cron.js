@@ -12,6 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.snapshotPortfolioAssetStates = snapshotPortfolioAssetStates;
 exports.executeUserPortfolioReportJob = executeUserPortfolioReportJob;
 exports.schedule30MinutePortfolioReports = schedule30MinutePortfolioReports;
 exports.schedule1MinutePortfolioReports = schedule1MinutePortfolioReports;
@@ -29,6 +30,61 @@ const portfolio_performance_reports_1 = require("../controllers/portfolio-perfor
 const db_1 = require("../db/db");
 const cascade_1 = require("../utils/cascade");
 const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
+function snapshotPortfolioAssetStates(snapshotDate) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        const dateUTC = snapshotDate ? new Date(snapshotDate) : new Date();
+        dateUTC.setUTCHours(0, 0, 0, 0);
+        const portfolios = yield db_1.db.userPortfolio.findMany({
+            where: { isActive: true },
+            select: {
+                id: true,
+                userAssets: {
+                    select: {
+                        assetId: true,
+                        stock: true,
+                        costPerShare: true,
+                        costPrice: true,
+                        allocationPercentage: true,
+                    },
+                },
+            },
+        });
+        let written = 0;
+        for (const p of portfolios) {
+            if (!((_a = p.userAssets) === null || _a === void 0 ? void 0 : _a.length))
+                continue;
+            for (const ua of p.userAssets) {
+                yield db_1.db.portfolioAssetDailyState.upsert({
+                    where: {
+                        userPortfolioId_assetId_snapshotDate: {
+                            userPortfolioId: p.id,
+                            assetId: ua.assetId,
+                            snapshotDate: dateUTC,
+                        },
+                    },
+                    update: {
+                        stock: ua.stock,
+                        costPerShare: ua.costPerShare,
+                        costPrice: ua.costPrice,
+                        allocationPercentage: ua.allocationPercentage,
+                    },
+                    create: {
+                        userPortfolioId: p.id,
+                        assetId: ua.assetId,
+                        snapshotDate: dateUTC,
+                        stock: ua.stock,
+                        costPerShare: ua.costPerShare,
+                        costPrice: ua.costPrice,
+                        allocationPercentage: ua.allocationPercentage,
+                    },
+                });
+                written++;
+            }
+        }
+        console.log(`   [portfolio-state-snapshot] Wrote ${written} position(s) for ${dateUTC.toISOString().slice(0, 10)}`);
+    });
+}
 function executePortfolioReportJob(label) {
     return __awaiter(this, void 0, void 0, function* () {
         const now = new Date().toISOString();
@@ -93,6 +149,7 @@ function executeUserPortfolioReportJob(userId) {
         console.log(`   Time  : ${new Date().toISOString()}`);
         console.log("============================================================");
         try {
+            yield snapshotPortfolioAssetStates();
             const result = yield (0, portfolio_performance_reports_1.generateDailyReportsForUser)(userId);
             console.log("");
             console.log("📊 User Report Summary:");
@@ -184,6 +241,8 @@ function scheduleDailyPortfolioReports() {
         console.log("📸 Step 1 — Snapshotting live prices for today (11 AM EAT)");
         console.log("============================================================");
         yield snapshotLivePricesForToday();
+        console.log("📸 Step 2 — Snapshotting portfolio asset positions for today");
+        yield snapshotPortfolioAssetStates();
         yield executePortfolioReportJob("DAILY");
     }));
 }
@@ -232,6 +291,8 @@ function schedule530PMEATDailyRegen() {
         console.log("📸 Step 1 — Snapshotting live prices for today (5:30 PM EAT)");
         console.log("============================================================");
         yield snapshotLivePricesForToday();
+        console.log("📸 Step 2 — Snapshotting portfolio asset positions for today");
+        yield snapshotPortfolioAssetStates();
         yield executeRegenReportJob("530PM-EAT-REGEN");
     }));
 }
