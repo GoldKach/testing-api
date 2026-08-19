@@ -11,6 +11,7 @@ import {
   cleanupPerformanceReports,
   backfillAssetSnapshots,
   backfillHistoricalReports,
+  generatePortfolioReportRange,
 } from "@/controllers/portfolio-performance-reports";
 import {
   generateUserPerformanceReports,
@@ -92,6 +93,12 @@ portfolioPerformanceReportsRouter.post(
 portfolioPerformanceReportsRouter.post(
   "/portfolio-performance-reports/backfill-historical",
   backfillHistoricalReports
+);
+
+// Generate historical reports for a single portfolio over a date range
+portfolioPerformanceReportsRouter.post(
+  "/portfolio-performance-reports/generate-range",
+  generatePortfolioReportRange
 );
 
 // ── Dynamic :id route last ─────────────────────────────────────────

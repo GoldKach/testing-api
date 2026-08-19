@@ -26,7 +26,8 @@
     "tsc-alias": "^1.8.10",
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.20.6",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "yahoo-finance2": "^4.0.2"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",

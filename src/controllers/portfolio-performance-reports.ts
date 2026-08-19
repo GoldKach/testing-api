@@ -1318,6 +1318,114 @@ export async function backfillHistoricalReports(req: Request, res: Response) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  POST /portfolio-performance-reports/generate-range                  */
+/*                                                                      */
+/*  Generates historical reports for a SINGLE portfolio over a date    */
+/*  range, using AssetPriceHistory prices and the best available        */
+/*  share-count source (same 3-tier logic as backfill).                */
+/*                                                                      */
+/*  Body: { portfolioId, startDate, endDate?, force? }                 */
+/*    portfolioId — the specific portfolio to target                   */
+/*    startDate   — ISO date string, e.g. "2025-11-13"                */
+/*    endDate     — ISO date string (defaults to yesterday if omitted)  */
+/*    force       — if true, replace existing reports for those dates   */
+/* ------------------------------------------------------------------ */
+export async function generatePortfolioReportRange(req: Request, res: Response) {
+  try {
+    const {
+      portfolioId,
+      startDate: startStr,
+      endDate:   endStr,
+      force = false,
+    } = req.body as {
+      portfolioId?: string;
+      startDate?:   string;
+      endDate?:     string;
+      force?:       boolean;
+    };
+
+    if (!portfolioId) {
+      return res.status(400).json({ data: null, error: "portfolioId is required" });
+    }
+    if (!startStr) {
+      return res.status(400).json({ data: null, error: "startDate is required (ISO string, e.g. '2025-01-01')" });
+    }
+
+    const portfolio = await db.userPortfolio.findUnique({
+      where:  { id: portfolioId },
+      select: { id: true, customName: true },
+    });
+    if (!portfolio) {
+      return res.status(404).json({ data: null, error: "Portfolio not found" });
+    }
+
+    const parseUTCMidnight = (s: string) => {
+      const d = new Date(s);
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    };
+
+    const startDate = parseUTCMidnight(startStr);
+    const endDate = endStr ? parseUTCMidnight(endStr) : (() => {
+      const y = new Date();
+      y.setUTCDate(y.getUTCDate() - 1);
+      y.setUTCHours(0, 0, 0, 0);
+      return y;
+    })();
+
+    if (startDate > endDate) {
+      return res.status(400).json({ data: null, error: "startDate must be before or equal to endDate" });
+    }
+
+    const dates: Date[] = [];
+    for (const d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+      dates.push(new Date(d));
+    }
+
+    let generated = 0, skipped = 0, failed = 0;
+    const errors: string[] = [];
+
+    for (const reportDate of dates) {
+      const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+      const dateStr = reportDate.toISOString().slice(0, 10);
+
+      try {
+        if (!force) {
+          const existing = await db.userPortfolioPerformanceReport.findFirst({
+            where:  { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
+            select: { id: true },
+          });
+          if (existing) { skipped++; continue; }
+        }
+
+        // strict=false → falls back to live price if no AssetPriceHistory entry exists
+        const id = await generateAndSaveReport(portfolioId, reportDate, false);
+        if (!id) throw new Error("generator returned null");
+        generated++;
+      } catch (err: any) {
+        failed++;
+        errors.push(`[${dateStr}]: ${err?.message ?? "unknown error"}`);
+      }
+    }
+
+    return res.status(200).json({
+      data: {
+        portfolio: portfolio.customName ?? portfolio.id,
+        dateRange: `${startDate.toISOString().slice(0, 10)} → ${endDate.toISOString().slice(0, 10)}`,
+        daysCount: dates.length,
+        generated,
+        skipped,
+        failed,
+        errors:    errors.slice(0, 50),
+      },
+      error: null,
+    });
+  } catch (err: any) {
+    console.error("generatePortfolioReportRange error:", err);
+    return res.status(500).json({ data: null, error: err?.message ?? "Failed to generate report range" });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Shared report include                                               */
 /* ------------------------------------------------------------------ */
 const REPORT_INCLUDE: Prisma.UserPortfolioPerformanceReportInclude = {
