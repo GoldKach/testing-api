@@ -20,6 +20,7 @@ exports.approveCompanyOnboarding = approveCompanyOnboarding;
 exports.updateCompanyOnboarding = updateCompanyOnboarding;
 exports.upsertCompanyOnboardingByUserId = upsertCompanyOnboardingByUserId;
 const db_1 = require("../db/db");
+const client_1 = require("@prisma/client");
 function getUserId(req) {
     var _a;
     return (_a = req === null || req === void 0 ? void 0 : req.user) === null || _a === void 0 ? void 0 : _a.userId;
@@ -502,11 +503,41 @@ function approveCompanyOnboarding(req, res) {
         }
     });
 }
+function checkCompanyUniqueFields(payload, ownerUserId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (payload.tin) {
+            if (!/^\d{10}$/.test(String(payload.tin))) {
+                return "TIN must be exactly 10 digits.";
+            }
+            const [indConflict, coConflict] = yield Promise.all([
+                db_1.db.individualOnboarding.findFirst({
+                    where: { tin: String(payload.tin), NOT: { userId: ownerUserId } },
+                    select: { id: true },
+                }),
+                db_1.db.companyOnboarding.findFirst({
+                    where: { tin: String(payload.tin), NOT: { userId: ownerUserId } },
+                    select: { id: true },
+                }),
+            ]);
+            if (indConflict || coConflict)
+                return "TIN is already in use.";
+        }
+        if (payload.registrationNumber) {
+            const regConflict = yield db_1.db.companyOnboarding.findFirst({
+                where: { registrationNumber: String(payload.registrationNumber), NOT: { userId: ownerUserId } },
+                select: { id: true },
+            });
+            if (regConflict)
+                return "Registration number is already in use.";
+        }
+        return null;
+    });
+}
 function buildCompanyOnboardingPatch(payload) {
     const updateData = {};
     const stringFields = [
         "companyName", "email", "companyAddress", "businessType",
-        "registrationNumber", "primaryGoal", "timeHorizon", "riskTolerance",
+        "registrationNumber", "tin", "primaryGoal", "timeHorizon", "riskTolerance",
         "investmentExperience", "sourceOfIncome", "expectedInvestment",
         "sanctionsOrLegal", "riskProfile", "suggestedStrategy", "advisorOverrideProfile", "advisorOverrideReason",
     ];
@@ -560,6 +591,7 @@ function buildCompanyOnboardingPatch(payload) {
 }
 function updateCompanyOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d;
         const { id } = req.params;
         const payload = req.body;
         const userIdFromBody = payload.userId;
@@ -570,6 +602,11 @@ function updateCompanyOnboarding(req, res) {
             }
             if (!existing && !userIdFromBody) {
                 return res.status(404).json({ error: "Company onboarding record not found." });
+            }
+            const ownerUserId = (_a = existing === null || existing === void 0 ? void 0 : existing.userId) !== null && _a !== void 0 ? _a : userIdFromBody;
+            const conflictError = yield checkCompanyUniqueFields(payload, ownerUserId);
+            if (conflictError) {
+                return res.status(409).json({ error: conflictError });
             }
             const updateData = buildCompanyOnboardingPatch(payload);
             let updated;
@@ -588,12 +625,17 @@ function updateCompanyOnboarding(req, res) {
         }
         catch (e) {
             console.error("updateCompanyOnboarding error:", e);
+            if (e instanceof client_1.Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+                const target = Array.isArray((_b = e.meta) === null || _b === void 0 ? void 0 : _b.target) ? e.meta.target.join(", ") : String((_d = (_c = e.meta) === null || _c === void 0 ? void 0 : _c.target) !== null && _d !== void 0 ? _d : "field");
+                return res.status(409).json({ error: `${target} is already in use by another client.` });
+            }
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });
 }
 function upsertCompanyOnboardingByUserId(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
         const { userId } = req.params;
         const payload = req.body;
         try {
@@ -601,6 +643,10 @@ function upsertCompanyOnboardingByUserId(req, res) {
                 where: { userId },
                 select: { id: true },
             });
+            const conflictError = yield checkCompanyUniqueFields(payload, userId);
+            if (conflictError) {
+                return res.status(409).json({ error: conflictError });
+            }
             const updateData = buildCompanyOnboardingPatch(payload);
             let updated;
             if (existing) {
@@ -618,6 +664,10 @@ function upsertCompanyOnboardingByUserId(req, res) {
         }
         catch (e) {
             console.error("upsertCompanyOnboardingByUserId error:", e);
+            if (e instanceof client_1.Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+                const target = Array.isArray((_a = e.meta) === null || _a === void 0 ? void 0 : _a.target) ? e.meta.target.join(", ") : String((_c = (_b = e.meta) === null || _b === void 0 ? void 0 : _b.target) !== null && _c !== void 0 ? _c : "field");
+                return res.status(409).json({ error: `${target} is already in use by another client.` });
+            }
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });

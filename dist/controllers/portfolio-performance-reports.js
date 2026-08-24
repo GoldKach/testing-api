@@ -14,6 +14,7 @@ exports.generateDailyReportsForAllPortfolios = generateDailyReportsForAllPortfol
 exports.regenerateDailyReportsForAllPortfolios = regenerateDailyReportsForAllPortfolios;
 exports.generateAllPortfoliosForDate = generateAllPortfoliosForDate;
 exports.backfillHistoricalReports = backfillHistoricalReports;
+exports.generatePortfolioReportRange = generatePortfolioReportRange;
 exports.generatePerformanceReport = generatePerformanceReport;
 exports.generateUserPerformanceReports = generateUserPerformanceReports;
 exports.generateAllPerformanceReports = generateAllPerformanceReports;
@@ -571,6 +572,87 @@ function backfillHistoricalReports(req, res) {
         catch (err) {
             console.error("backfillHistoricalReports error:", err);
             return res.status(500).json({ data: null, error: (_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : "Backfill failed" });
+        }
+    });
+}
+function generatePortfolioReportRange(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
+        try {
+            const { portfolioId, startDate: startStr, endDate: endStr, force = false, } = req.body;
+            if (!portfolioId) {
+                return res.status(400).json({ data: null, error: "portfolioId is required" });
+            }
+            if (!startStr) {
+                return res.status(400).json({ data: null, error: "startDate is required (ISO string, e.g. '2025-01-01')" });
+            }
+            const portfolio = yield db_1.db.userPortfolio.findUnique({
+                where: { id: portfolioId },
+                select: { id: true, customName: true },
+            });
+            if (!portfolio) {
+                return res.status(404).json({ data: null, error: "Portfolio not found" });
+            }
+            const parseUTCMidnight = (s) => {
+                const d = new Date(s);
+                return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+            };
+            const startDate = parseUTCMidnight(startStr);
+            const endDate = endStr ? parseUTCMidnight(endStr) : (() => {
+                const y = new Date();
+                y.setUTCDate(y.getUTCDate() - 1);
+                y.setUTCHours(0, 0, 0, 0);
+                return y;
+            })();
+            if (startDate > endDate) {
+                return res.status(400).json({ data: null, error: "startDate must be before or equal to endDate" });
+            }
+            const dates = [];
+            for (const d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+                dates.push(new Date(d));
+            }
+            let generated = 0, skipped = 0, failed = 0;
+            const errors = [];
+            for (const reportDate of dates) {
+                const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+                const dateStr = reportDate.toISOString().slice(0, 10);
+                try {
+                    if (!force) {
+                        const existing = yield db_1.db.userPortfolioPerformanceReport.findFirst({
+                            where: { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
+                            select: { id: true },
+                        });
+                        if (existing) {
+                            skipped++;
+                            continue;
+                        }
+                    }
+                    const id = yield generateAndSaveReport(portfolioId, reportDate, false);
+                    if (!id)
+                        throw new Error("generator returned null");
+                    generated++;
+                }
+                catch (err) {
+                    failed++;
+                    errors.push(`[${dateStr}]: ${(_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : "unknown error"}`);
+                }
+            }
+            return res.status(200).json({
+                data: {
+                    portfolio: (_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id,
+                    dateRange: `${startDate.toISOString().slice(0, 10)} → ${endDate.toISOString().slice(0, 10)}`,
+                    daysCount: dates.length,
+                    generated,
+                    skipped,
+                    failed,
+                    errors: errors.slice(0, 50),
+                },
+                error: null,
+            });
+        }
+        catch (err) {
+            console.error("generatePortfolioReportRange error:", err);
+            return res.status(500).json({ data: null, error: (_c = err === null || err === void 0 ? void 0 : err.message) !== null && _c !== void 0 ? _c : "Failed to generate report range" });
         }
     });
 }

@@ -575,6 +575,44 @@ export async function approveCompanyOnboarding(req: Request, res: Response) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared: check tin/registrationNumber aren't already used by another
+// company's onboarding record before writing. Mirrors the checks done in
+// submitCompanyOnboarding so admin edits fail with a clear 409 instead of
+// an unhandled Prisma unique-constraint error.
+// ---------------------------------------------------------------------------
+async function checkCompanyUniqueFields(
+  payload: Record<string, any>,
+  ownerUserId: string
+): Promise<string | null> {
+  if (payload.tin) {
+    if (!/^\d{10}$/.test(String(payload.tin))) {
+      return "TIN must be exactly 10 digits.";
+    }
+    const [indConflict, coConflict] = await Promise.all([
+      db.individualOnboarding.findFirst({
+        where: { tin: String(payload.tin), NOT: { userId: ownerUserId } },
+        select: { id: true },
+      }),
+      db.companyOnboarding.findFirst({
+        where: { tin: String(payload.tin), NOT: { userId: ownerUserId } },
+        select: { id: true },
+      }),
+    ]);
+    if (indConflict || coConflict) return "TIN is already in use.";
+  }
+
+  if (payload.registrationNumber) {
+    const regConflict = await db.companyOnboarding.findFirst({
+      where: { registrationNumber: String(payload.registrationNumber), NOT: { userId: ownerUserId } },
+      select: { id: true },
+    });
+    if (regConflict) return "Registration number is already in use.";
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Shared: build the field patch map from an update payload.
 // Used by both update-by-id and upsert-by-userId handlers.
 // ---------------------------------------------------------------------------
@@ -666,6 +704,12 @@ export async function updateCompanyOnboarding(req: Request, res: Response) {
       return res.status(404).json({ error: "Company onboarding record not found." });
     }
 
+    const ownerUserId = existing?.userId ?? userIdFromBody;
+    const conflictError = await checkCompanyUniqueFields(payload, ownerUserId);
+    if (conflictError) {
+      return res.status(409).json({ error: conflictError });
+    }
+
     const updateData = buildCompanyOnboardingPatch(payload);
 
     let updated: any;
@@ -691,6 +735,10 @@ export async function updateCompanyOnboarding(req: Request, res: Response) {
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("updateCompanyOnboarding error:", e);
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const target = Array.isArray(e.meta?.target) ? e.meta!.target.join(", ") : String(e.meta?.target ?? "field");
+      return res.status(409).json({ error: `${target} is already in use by another client.` });
+    }
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }
@@ -708,6 +756,11 @@ export async function upsertCompanyOnboardingByUserId(req: Request, res: Respons
       where: { userId },
       select: { id: true },
     });
+
+    const conflictError = await checkCompanyUniqueFields(payload, userId);
+    if (conflictError) {
+      return res.status(409).json({ error: conflictError });
+    }
 
     const updateData = buildCompanyOnboardingPatch(payload);
 
@@ -734,6 +787,10 @@ export async function upsertCompanyOnboardingByUserId(req: Request, res: Respons
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("upsertCompanyOnboardingByUserId error:", e);
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const target = Array.isArray(e.meta?.target) ? e.meta!.target.join(", ") : String(e.meta?.target ?? "field");
+      return res.status(409).json({ error: `${target} is already in use by another client.` });
+    }
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }

@@ -520,6 +520,10 @@ export async function updateIndividualOnboarding(req: Request, res: Response) {
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("updateIndividualOnboarding error:", e);
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const target = Array.isArray(e.meta?.target) ? e.meta!.target.join(", ") : String(e.meta?.target ?? "field");
+      return res.status(409).json({ error: `${target} is already in use by another client.` });
+    }
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }
@@ -555,6 +559,10 @@ export async function upsertIndividualOnboardingByUserId(req: Request, res: Resp
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {
     console.error("upsertIndividualOnboardingByUserId error:", e);
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      const target = Array.isArray(e.meta?.target) ? e.meta!.target.join(", ") : String(e.meta?.target ?? "field");
+      return res.status(409).json({ error: `${target} is already in use by another client.` });
+    }
     return res.status(500).json({ error: "Failed to update onboarding." });
   }
 }

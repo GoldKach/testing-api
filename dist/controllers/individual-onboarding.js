@@ -17,6 +17,7 @@ exports.approveIndividualOnboarding = approveIndividualOnboarding;
 exports.updateIndividualOnboarding = updateIndividualOnboarding;
 exports.upsertIndividualOnboardingByUserId = upsertIndividualOnboardingByUserId;
 const db_1 = require("../db/db");
+const client_1 = require("@prisma/client");
 function getUserId(req) {
     var _a;
     return (_a = req === null || req === void 0 ? void 0 : req.user) === null || _a === void 0 ? void 0 : _a.userId;
@@ -418,6 +419,7 @@ function buildIndividualOnboardingPatch(payload) {
 }
 function updateIndividualOnboarding(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
         const { id } = req.params;
         const payload = req.body;
         const userIdFromBody = payload.userId;
@@ -446,12 +448,17 @@ function updateIndividualOnboarding(req, res) {
         }
         catch (e) {
             console.error("updateIndividualOnboarding error:", e);
+            if (e instanceof client_1.Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+                const target = Array.isArray((_a = e.meta) === null || _a === void 0 ? void 0 : _a.target) ? e.meta.target.join(", ") : String((_c = (_b = e.meta) === null || _b === void 0 ? void 0 : _b.target) !== null && _c !== void 0 ? _c : "field");
+                return res.status(409).json({ error: `${target} is already in use by another client.` });
+            }
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });
 }
 function upsertIndividualOnboardingByUserId(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
         const { userId } = req.params;
         const payload = req.body;
         try {
@@ -476,6 +483,10 @@ function upsertIndividualOnboardingByUserId(req, res) {
         }
         catch (e) {
             console.error("upsertIndividualOnboardingByUserId error:", e);
+            if (e instanceof client_1.Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+                const target = Array.isArray((_a = e.meta) === null || _a === void 0 ? void 0 : _a.target) ? e.meta.target.join(", ") : String((_c = (_b = e.meta) === null || _b === void 0 ? void 0 : _b.target) !== null && _c !== void 0 ? _c : "field");
+                return res.status(409).json({ error: `${target} is already in use by another client.` });
+            }
             return res.status(500).json({ error: "Failed to update onboarding." });
         }
     });
