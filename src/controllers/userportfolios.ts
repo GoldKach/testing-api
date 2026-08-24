@@ -2,6 +2,7 @@
 import type { Request, Response } from "express";
 import { db } from "@/db/db";
 import type { Prisma } from "@prisma/client";
+import { notifyPortfolioAllocated } from "@/services/notifications";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -426,6 +427,10 @@ export async function createUserPortfolio(req: Request, res: Response) {
       where:   { id: upId },
       include: DEFAULT_INCLUDE,
     });
+
+    notifyPortfolioAllocated(userId, customName.trim(), investedAmt).catch((err) =>
+      console.error("[notifications] portfolio-allocated failed:", err)
+    );
 
     return res.status(201).json({ data: result, error: null });
   } catch (err: any) {

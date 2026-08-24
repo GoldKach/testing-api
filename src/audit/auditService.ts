@@ -23,6 +23,7 @@
  */
 
 import { db } from "@/db/db";
+import { notifySecurityAlert } from "@/services/notifications";
 
 // ─── Local type mirrors (schema enums) ────────────────────────────────────────
 // Defined locally so the service compiles before/without `prisma generate`.
@@ -238,6 +239,23 @@ class AuditService {
           console.error("[AuditService] logSecurity failed:", err.message)
         );
     });
+
+    // Any HIGH/CRITICAL security event alerts staff (Super Admin, CR, Onboarding
+    // Officer) in-app + email. One choke point — covers brute-force today and any
+    // future high-risk SecurityEventType without new call sites.
+    if (params.riskLevel === "HIGH" || params.riskLevel === "CRITICAL") {
+      setImmediate(() => {
+        notifySecurityAlert({
+          eventType: params.eventType,
+          riskLevel: params.riskLevel ?? "HIGH",
+          description: params.description,
+          userEmail: params.userEmail,
+          metadata: params.metadata,
+        }).catch((err: Error) =>
+          console.error("[AuditService] security alert notification failed:", err.message)
+        );
+      });
+    }
   }
 
   // ── API request log ──────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import ResetPasswordEmail from "@/emails/reset-password-email";
 import VerificationCodeEmail from "@/emails/VerificationCodeEmail";
 import AccountVerifiedEmail from "@/emails/AccountVerifiedEmail";
 import OnboardingSubmittedEmail from "@/emails/OnboardingSubmittedEmail";
+import NotificationEmail from "@/emails/NotificationEmail";
 
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
@@ -118,5 +119,30 @@ export async function sendAccountVerifiedEmail(args: {
     subject: "Your GoldKach email has been verified — next steps",
     react: React.createElement(AccountVerifiedEmail, { name }),
     tags: [{ name: "category", value: "account-verified" }],
+  });
+}
+
+/**
+ * Generic client-facing notification email — shared across all in-app
+ * notification types (deposits, withdrawals, redemptions, onboarding
+ * approval, portfolio allocation). Copy is supplied by the caller.
+ */
+export async function sendNotificationEmail(args: {
+  to: string;
+  name?: string;
+  subject: string;
+  title: string;
+  message: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  category: string;
+}) {
+  const { to, name = "there", subject, title, message, ctaLabel, ctaUrl, category } = args;
+
+  return sendEmail({
+    to,
+    subject,
+    react: React.createElement(NotificationEmail, { name, title, message, ctaLabel, ctaUrl }),
+    tags: [{ name: "category", value: category }],
   });
 }

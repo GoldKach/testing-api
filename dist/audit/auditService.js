@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.auditService = void 0;
 const db_1 = require("../db/db");
+const notifications_1 = require("../services/notifications");
 const BRUTE_WINDOW_MS = 15 * 60 * 1000;
 const BRUTE_THRESHOLD = 5;
 const _loginFailures = new Map();
@@ -54,6 +55,18 @@ class AuditService {
             })
                 .catch((err) => console.error("[AuditService] logSecurity failed:", err.message));
         });
+        if (params.riskLevel === "HIGH" || params.riskLevel === "CRITICAL") {
+            setImmediate(() => {
+                var _a;
+                (0, notifications_1.notifySecurityAlert)({
+                    eventType: params.eventType,
+                    riskLevel: (_a = params.riskLevel) !== null && _a !== void 0 ? _a : "HIGH",
+                    description: params.description,
+                    userEmail: params.userEmail,
+                    metadata: params.metadata,
+                }).catch((err) => console.error("[AuditService] security alert notification failed:", err.message));
+            });
+        }
     }
     logApi(params) {
         setImmediate(() => {

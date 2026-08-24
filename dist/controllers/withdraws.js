@@ -18,6 +18,7 @@ exports.rejectWithdrawal = rejectWithdrawal;
 exports.deleteWithdrawal = deleteWithdrawal;
 const db_1 = require("../db/db");
 const portfolio_performance_report_1 = require("../controllers/portfolio-performance-report");
+const notifications_1 = require("../services/notifications");
 function asStatus(v) {
     const s = String(v || "").toUpperCase();
     if (s === "PENDING" || s === "APPROVED" || s === "REJECTED")
@@ -191,6 +192,7 @@ function createWithdrawal(req, res) {
                         createdByRole: (_c = createdByRole) !== null && _c !== void 0 ? _c : null,
                     },
                 });
+                (0, notifications_1.notifyWithdrawalReceived)(userId, amt, false).catch((err) => console.error("[notifications] withdrawal-received failed:", err));
                 return res.status(201).json({ data: created, error: null });
             }
             if (!userPortfolioId) {
@@ -242,6 +244,8 @@ function createWithdrawal(req, res) {
                     createdByRole: (_e = createdByRole) !== null && _e !== void 0 ? _e : null,
                 },
             });
+            (0, notifications_1.notifyWithdrawalReceived)(userId, amt, true).catch((err) => console.error("[notifications] withdrawal-received (redemption) failed:", err));
+            (0, notifications_1.notifyStaffRedemptionRequested)(userId, amt).catch((err) => console.error("[notifications] staff redemption-requested failed:", err));
             return res.status(201).json({ data: created, error: null });
         }
         catch (error) {
@@ -528,6 +532,12 @@ function approveWithdrawal(req, res) {
                 return row;
             }), { timeout: 30000, maxWait: 35000 });
             res.status(200).json({ data: approved, error: null });
+            if (existing.withdrawalType === "REDEMPTION") {
+                (0, notifications_1.notifyRedemptionApproved)(existing.userId, existing.amount).catch((err) => console.error("[notifications] redemption-approved failed:", err));
+            }
+            else {
+                (0, notifications_1.notifyWithdrawalApproved)(existing.userId, existing.amount).catch((err) => console.error("[notifications] withdrawal-approved failed:", err));
+            }
             if (existing.withdrawalType === "REDEMPTION" && existing.userPortfolioId) {
                 (0, portfolio_performance_report_1.regenerateReportForPortfolio)(existing.userPortfolioId).catch((err) => console.error(`[regenerateReport] REDEMPTION failed for ${existing.userPortfolioId}:`, err));
             }

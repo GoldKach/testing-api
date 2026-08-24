@@ -1,0 +1,4 @@
+-- AlterEnum: add staff-facing notification types
+ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'REDEMPTION_REQUESTED';
+ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'TOPUP_REQUESTED';
+ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'SECURITY_ALERT';

@@ -18,6 +18,7 @@ exports.updateIndividualOnboarding = updateIndividualOnboarding;
 exports.upsertIndividualOnboardingByUserId = upsertIndividualOnboardingByUserId;
 const db_1 = require("../db/db");
 const client_1 = require("@prisma/client");
+const notifications_1 = require("../services/notifications");
 function getUserId(req) {
     var _a;
     return (_a = req === null || req === void 0 ? void 0 : req.user) === null || _a === void 0 ? void 0 : _a.userId;
@@ -353,6 +354,7 @@ function approveIndividualOnboarding(req, res) {
                 data: { isApproved: true },
                 select: { id: true, userId: true, isApproved: true, updatedAt: true },
             });
+            (0, notifications_1.notifyOnboardingApproved)(updated.userId, false).catch((err) => console.error("[notifications] onboarding-approved (individual) failed:", err));
             return res.status(200).json({ ok: true, data: updated });
         }
         catch (e) {

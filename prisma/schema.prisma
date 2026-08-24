@@ -178,6 +178,7 @@ model User {
   staffProfile    StaffProfile?
   signature       Signature?
   amlRiskAssessment AMLRiskAssessment?
+  notifications   Notification[]
 }
 
 model RefreshToken {
@@ -1627,4 +1628,37 @@ model SentEmail {
   sentBy       String?  // userId of the admin/staff who sent it
   sentByName   String?
   sentAt       DateTime @default(now())
+}
+
+// =====================
+// Client Notifications
+// =====================
+
+enum NotificationType {
+  ONBOARDING_APPROVED
+  DEPOSIT_RECEIVED
+  DEPOSIT_APPROVED
+  WITHDRAWAL_RECEIVED
+  WITHDRAWAL_APPROVED
+  REDEMPTION_APPROVED
+  PORTFOLIO_ALLOCATED
+  REDEMPTION_REQUESTED
+  TOPUP_REQUESTED
+  SECURITY_ALERT
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  meta      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, isRead])
 }

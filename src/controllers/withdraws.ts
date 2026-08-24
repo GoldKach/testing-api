@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import { Prisma, UserRole } from "@prisma/client";
 import { db } from "@/db/db";
 import { regenerateReportForPortfolio } from "@/controllers/portfolio-performance-report";
+import { notifyWithdrawalReceived, notifyWithdrawalApproved, notifyRedemptionApproved, notifyStaffRedemptionRequested } from "@/services/notifications";
 
 /* --------------------------------- helpers --------------------------------- */
 
@@ -214,6 +215,10 @@ export async function createWithdrawal(req: Request, res: Response) {
         },
       });
 
+      notifyWithdrawalReceived(userId, amt, false).catch((err) =>
+        console.error("[notifications] withdrawal-received failed:", err)
+      );
+
       return res.status(201).json({ data: created, error: null });
     }
 
@@ -270,6 +275,13 @@ export async function createWithdrawal(req: Request, res: Response) {
         createdByRole:     (createdByRole as UserRole) ?? null,
       },
     });
+
+    notifyWithdrawalReceived(userId, amt, true).catch((err) =>
+      console.error("[notifications] withdrawal-received (redemption) failed:", err)
+    );
+    notifyStaffRedemptionRequested(userId, amt).catch((err) =>
+      console.error("[notifications] staff redemption-requested failed:", err)
+    );
 
     return res.status(201).json({ data: created, error: null });
   } catch (error: any) {
@@ -663,6 +675,17 @@ export async function approveWithdrawal(req: Request, res: Response) {
     }, { timeout: 30000, maxWait: 35000 });
 
     res.status(200).json({ data: approved, error: null });
+
+    // Notify the client — fire-and-forget, must never affect the response already sent
+    if (existing.withdrawalType === "REDEMPTION") {
+      notifyRedemptionApproved(existing.userId, existing.amount).catch((err) =>
+        console.error("[notifications] redemption-approved failed:", err)
+      );
+    } else {
+      notifyWithdrawalApproved(existing.userId, existing.amount).catch((err) =>
+        console.error("[notifications] withdrawal-approved failed:", err)
+      );
+    }
 
     // Regenerate performance report in the background
     if (existing.withdrawalType === "REDEMPTION" && existing.userPortfolioId) {

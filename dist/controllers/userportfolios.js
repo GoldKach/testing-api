@@ -16,6 +16,7 @@ exports.updateUserPortfolio = updateUserPortfolio;
 exports.recomputeUserPortfolio = recomputeUserPortfolio;
 exports.deleteUserPortfolio = deleteUserPortfolio;
 const db_1 = require("../db/db");
+const notifications_1 = require("../services/notifications");
 function toNumber(v, fallback = 0) {
     const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
     return Number.isFinite(n) ? n : fallback;
@@ -313,6 +314,7 @@ function createUserPortfolio(req, res) {
                 where: { id: upId },
                 include: DEFAULT_INCLUDE,
             });
+            (0, notifications_1.notifyPortfolioAllocated)(userId, customName.trim(), investedAmt).catch((err) => console.error("[notifications] portfolio-allocated failed:", err));
             return res.status(201).json({ data: result, error: null });
         }
         catch (err) {

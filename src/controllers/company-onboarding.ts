@@ -2,6 +2,7 @@
 import { Request, Response } from "express";
 import { db } from "@/db/db";
 import { CompanyType, OwnershipType, Prisma } from "@prisma/client";
+import { notifyOnboardingApproved } from "@/services/notifications";
 
 function getUserId(req: Request): string | undefined {
   return (req as any)?.user?.userId;
@@ -566,6 +567,10 @@ export async function approveCompanyOnboarding(req: Request, res: Response) {
       data: { isApproved: true },
       select: { id: true, userId: true, isApproved: true, updatedAt: true },
     });
+
+    notifyOnboardingApproved(updated.userId, true).catch((err) =>
+      console.error("[notifications] onboarding-approved (company) failed:", err)
+    );
 
     return res.status(200).json({ ok: true, data: updated });
   } catch (e) {

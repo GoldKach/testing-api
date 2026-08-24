@@ -20,6 +20,7 @@ exports.reverseDeposit = reverseDeposit;
 exports.deleteDeposit = deleteDeposit;
 exports.getDepositFeeSummary = getDepositFeeSummary;
 const db_1 = require("../db/db");
+const notifications_1 = require("../services/notifications");
 const Status = {
     PENDING: "PENDING",
     APPROVED: "APPROVED",
@@ -431,6 +432,10 @@ function createDeposit(req, res) {
                 },
                 include: DEPOSIT_INCLUDE,
             });
+            (0, notifications_1.notifyDepositReceived)(userId, amt).catch((err) => console.error("[notifications] deposit-received failed:", err));
+            if (target === "ALLOCATION") {
+                (0, notifications_1.notifyStaffTopupRequested)(userId, amt).catch((err) => console.error("[notifications] staff topup-requested failed:", err));
+            }
             return res.status(201).json({ data: created, error: null });
         }
         catch (error) {
@@ -582,6 +587,7 @@ function approveDeposit(req, res) {
                 }
             }), { timeout: 30000 });
             const result = yield db_1.db.deposit.findUnique({ where: { id: approved.id }, include: DEPOSIT_INCLUDE });
+            (0, notifications_1.notifyDepositApproved)(existing.userId, existing.amount).catch((err) => console.error("[notifications] deposit-approved failed:", err));
             return res.status(200).json({ data: result, error: null });
         }
         catch (error) {

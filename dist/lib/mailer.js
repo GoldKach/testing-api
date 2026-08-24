@@ -39,12 +39,14 @@ exports.sendResetEmailResend = sendResetEmailResend;
 exports.sendVerificationCodeResend = sendVerificationCodeResend;
 exports.sendOnboardingSubmittedEmail = sendOnboardingSubmittedEmail;
 exports.sendAccountVerifiedEmail = sendAccountVerifiedEmail;
+exports.sendNotificationEmail = sendNotificationEmail;
 const React = __importStar(require("react"));
 const resend_1 = require("resend");
 const reset_password_email_1 = __importDefault(require("../emails/reset-password-email"));
 const VerificationCodeEmail_1 = __importDefault(require("../emails/VerificationCodeEmail"));
 const AccountVerifiedEmail_1 = __importDefault(require("../emails/AccountVerifiedEmail"));
 const OnboardingSubmittedEmail_1 = __importDefault(require("../emails/OnboardingSubmittedEmail"));
+const NotificationEmail_1 = __importDefault(require("../emails/NotificationEmail"));
 const API_KEY = process.env.RESEND_API_KEY;
 if (!API_KEY) {
     throw new Error("RESEND_API_KEY is not set");
@@ -112,6 +114,17 @@ function sendAccountVerifiedEmail(args) {
             subject: "Your GoldKach email has been verified — next steps",
             react: React.createElement(AccountVerifiedEmail_1.default, { name }),
             tags: [{ name: "category", value: "account-verified" }],
+        });
+    });
+}
+function sendNotificationEmail(args) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { to, name = "there", subject, title, message, ctaLabel, ctaUrl, category } = args;
+        return sendEmail({
+            to,
+            subject,
+            react: React.createElement(NotificationEmail_1.default, { name, title, message, ctaLabel, ctaUrl }),
+            tags: [{ name: "category", value: category }],
         });
     });
 }

@@ -2,6 +2,7 @@
 import { Request, Response } from "express";
 import { Prisma, $Enums, UserRole } from "@prisma/client";
 import { db } from "@/db/db";
+import { notifyDepositReceived, notifyDepositApproved, notifyStaffTopupRequested } from "@/services/notifications";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -539,6 +540,15 @@ export async function createDeposit(req: Request, res: Response) {
       include: DEPOSIT_INCLUDE,
     });
 
+    notifyDepositReceived(userId, amt).catch((err) =>
+      console.error("[notifications] deposit-received failed:", err)
+    );
+    if (target === "ALLOCATION") {
+      notifyStaffTopupRequested(userId, amt).catch((err) =>
+        console.error("[notifications] staff topup-requested failed:", err)
+      );
+    }
+
     return res.status(201).json({ data: created, error: null });
   } catch (error: any) {
     if (error?.code === "P2002") {
@@ -733,6 +743,11 @@ export async function approveDeposit(req: Request, res: Response) {
     }, { timeout: 30000 });
 
     const result = await db.deposit.findUnique({ where: { id: approved.id }, include: DEPOSIT_INCLUDE });
+
+    notifyDepositApproved(existing.userId, existing.amount).catch((err) =>
+      console.error("[notifications] deposit-approved failed:", err)
+    );
+
     return res.status(200).json({ data: result, error: null });
   } catch (error) {
     console.error("approveDeposit error:", error);
