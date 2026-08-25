@@ -1016,18 +1016,20 @@ model IndividualOnboarding {
   agent   StaffProfile? @relation("IndividualOnboardingAgent", fields: [agentId], references: [id], onUpdate: Cascade)
 
   // Personal info
-  title            String?   // Mr., Mrs., Ms., Dr., etc.
-  fullName         String?
-  dateOfBirth      DateTime?
-  tin              String?
-  avatarUrl        String?
-  homeAddress      String?
-  email            String?
-  phoneNumber      String?
-  employmentStatus String?
-  occupation       String?
-  companyName      String?   // employer name (optional)
-  hasBusiness      String?
+  title              String?   // Mr., Mrs., Ms., Dr., etc.
+  fullName           String?
+  dateOfBirth        DateTime?
+  tin                String?
+  avatarUrl          String?
+  nationality        String?
+  countryOfResidence String?
+  homeAddress        String?
+  email              String?
+  phoneNumber        String?
+  employmentStatus   String?
+  occupation         String?
+  companyName        String?   // employer name (optional)
+  hasBusiness        String?
 
   // Investment profile
   primaryGoal          String?
