@@ -577,7 +577,7 @@ function backfillHistoricalReports(req, res) {
 }
 function generatePortfolioReportRange(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c;
+        var _a, _b;
         try {
             const { portfolioId, startDate: startStr, endDate: endStr, force = false, } = req.body;
             if (!portfolioId) {
@@ -613,33 +613,42 @@ function generatePortfolioReportRange(req, res) {
             }
             let generated = 0, skipped = 0, failed = 0;
             const errors = [];
-            for (const reportDate of dates) {
-                const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
-                const dateStr = reportDate.toISOString().slice(0, 10);
-                try {
+            const BATCH = 10;
+            for (let i = 0; i < dates.length; i += BATCH) {
+                const batch = dates.slice(i, i + BATCH);
+                const results = yield Promise.allSettled(batch.map((reportDate) => __awaiter(this, void 0, void 0, function* () {
+                    const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
                     if (!force) {
                         const existing = yield db_1.db.userPortfolioPerformanceReport.findFirst({
                             where: { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
                             select: { id: true },
                         });
-                        if (existing) {
-                            skipped++;
-                            continue;
-                        }
+                        if (existing)
+                            return "skipped";
                     }
                     const id = yield generateAndSaveReport(portfolioId, reportDate, false);
                     if (!id)
                         throw new Error("generator returned null");
-                    generated++;
-                }
-                catch (err) {
-                    failed++;
-                    errors.push(`[${dateStr}]: ${(_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : "unknown error"}`);
-                }
+                    return "generated";
+                })));
+                results.forEach((r, j) => {
+                    var _a, _b;
+                    const dateStr = batch[j].toISOString().slice(0, 10);
+                    if (r.status === "fulfilled") {
+                        if (r.value === "skipped")
+                            skipped++;
+                        else
+                            generated++;
+                    }
+                    else {
+                        failed++;
+                        errors.push(`[${dateStr}]: ${(_b = (_a = r.reason) === null || _a === void 0 ? void 0 : _a.message) !== null && _b !== void 0 ? _b : "unknown error"}`);
+                    }
+                });
             }
             return res.status(200).json({
                 data: {
-                    portfolio: (_b = portfolio.customName) !== null && _b !== void 0 ? _b : portfolio.id,
+                    portfolio: (_a = portfolio.customName) !== null && _a !== void 0 ? _a : portfolio.id,
                     dateRange: `${startDate.toISOString().slice(0, 10)} → ${endDate.toISOString().slice(0, 10)}`,
                     daysCount: dates.length,
                     generated,
@@ -652,7 +661,7 @@ function generatePortfolioReportRange(req, res) {
         }
         catch (err) {
             console.error("generatePortfolioReportRange error:", err);
-            return res.status(500).json({ data: null, error: (_c = err === null || err === void 0 ? void 0 : err.message) !== null && _c !== void 0 ? _c : "Failed to generate report range" });
+            return res.status(500).json({ data: null, error: (_b = err === null || err === void 0 ? void 0 : err.message) !== null && _b !== void 0 ? _b : "Failed to generate report range" });
         }
     });
 }

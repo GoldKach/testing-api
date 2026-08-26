@@ -1384,27 +1384,41 @@ export async function generatePortfolioReportRange(req: Request, res: Response) 
     let generated = 0, skipped = 0, failed = 0;
     const errors: string[] = [];
 
-    for (const reportDate of dates) {
-      const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
-      const dateStr = reportDate.toISOString().slice(0, 10);
+    // Each day's report is reconstructed independently from live portfolio
+    // state + AssetPriceHistory + delta tables — it never reads another
+    // day's already-generated report — so days are safe to process in
+    // parallel batches, same pattern as generateAllPortfoliosForDate above.
+    const BATCH = 10;
+    for (let i = 0; i < dates.length; i += BATCH) {
+      const batch = dates.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map(async (reportDate) => {
+          const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
 
-      try {
-        if (!force) {
-          const existing = await db.userPortfolioPerformanceReport.findFirst({
-            where:  { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
-            select: { id: true },
-          });
-          if (existing) { skipped++; continue; }
+          if (!force) {
+            const existing = await db.userPortfolioPerformanceReport.findFirst({
+              where:  { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
+              select: { id: true },
+            });
+            if (existing) return "skipped" as const;
+          }
+
+          // strict=false → falls back to live price if no AssetPriceHistory entry exists
+          const id = await generateAndSaveReport(portfolioId, reportDate, false);
+          if (!id) throw new Error("generator returned null");
+          return "generated" as const;
+        })
+      );
+
+      results.forEach((r, j) => {
+        const dateStr = batch[j].toISOString().slice(0, 10);
+        if (r.status === "fulfilled") {
+          if (r.value === "skipped") skipped++; else generated++;
+        } else {
+          failed++;
+          errors.push(`[${dateStr}]: ${r.reason?.message ?? "unknown error"}`);
         }
-
-        // strict=false → falls back to live price if no AssetPriceHistory entry exists
-        const id = await generateAndSaveReport(portfolioId, reportDate, false);
-        if (!id) throw new Error("generator returned null");
-        generated++;
-      } catch (err: any) {
-        failed++;
-        errors.push(`[${dateStr}]: ${err?.message ?? "unknown error"}`);
-      }
+      });
     }
 
     return res.status(200).json({
