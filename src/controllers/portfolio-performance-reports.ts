@@ -657,18 +657,21 @@ async function resolveHistoricalStocks(
   const assetIds = userAssets.map((ua) => ua.assetId);
 
   // ── 1. Try PortfolioAssetDailyState: most-recent snapshot ≤ targetDate ──
+  // Same DISTINCT ON optimization as the price-history lookup above — only
+  // the latest snapshot per asset is needed, not the full history.
   const dailyRows = await db.portfolioAssetDailyState.findMany({
     where: {
       userPortfolioId,
       assetId:      { in: assetIds },
       snapshotDate: { lte: targetDateUTC },
     },
-    orderBy: { snapshotDate: "desc" },
+    orderBy: [{ assetId: "asc" }, { snapshotDate: "desc" }],
+    distinct: ["assetId"],
   });
 
   const snapshotMap = new Map<string, typeof dailyRows[0]>();
   for (const row of dailyRows) {
-    if (!snapshotMap.has(row.assetId)) snapshotMap.set(row.assetId, row);
+    snapshotMap.set(row.assetId, row);
   }
 
   // If we have a daily snapshot for EVERY asset, use them (best accuracy)
@@ -803,23 +806,43 @@ async function generatePortfolioReport(
     reportDateUTC.setUTCHours(0, 0, 0, 0);
     const reportDateStr = reportDateUTC.toISOString().slice(0, 10);
 
-    const historicalPriceMap = new Map<string, number>(); // assetId → closest price on or before reportDate
     const assetIds = userPortfolio.userAssets.map((ua) => ua.assetId);
-    if (assetIds.length > 0) {
-      // Fetch all history rows on or before reportDate, newest first.
-      // The first row per asset is the most recent price on or before the report date.
-      const historyRows = await db.assetPriceHistory.findMany({
-        where: {
-          assetId:   { in: assetIds },
-          priceDate: { lte: reportDateUTC },
-        },
-        orderBy: { priceDate: "desc" },
-      });
-      for (const row of historyRows) {
-        if (!historicalPriceMap.has(row.assetId)) {
-          historicalPriceMap.set(row.assetId, Number(row.closePrice));
-        }
-      }
+
+    // For today's reports: live userAssets (source = "live") are accurate.
+    // For historical dates: use daily state snapshots or delta reconstruction
+    // so that future redemptions don't corrupt the historical record.
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+    const isHistorical = reportDateUTC.getTime() < todayUTC.getTime();
+
+    // Price-history lookup and historical-share resolution are independent
+    // reads (neither depends on the other's result) — running them
+    // concurrently instead of sequentially cuts one full network round trip
+    // off every single report, which matters a lot when generating a wide
+    // date range where this function runs hundreds of times in a row.
+    const [historyRows, historicalStockMap] = await Promise.all([
+      assetIds.length > 0
+        ? db.assetPriceHistory.findMany({
+            // Only the single most-recent row per asset on or before
+            // reportDate is needed. `distinct` + matching `orderBy` compiles
+            // to a Postgres DISTINCT ON, so this returns at most
+            // assetIds.length rows instead of the entire price-history table
+            // up to that date (which, for a date near "today" against a
+            // table with a long-running daily snapshot job, can be
+            // thousands of rows).
+            where: { assetId: { in: assetIds }, priceDate: { lte: reportDateUTC } },
+            orderBy: [{ assetId: "asc" }, { priceDate: "desc" }],
+            distinct: ["assetId"],
+          })
+        : Promise.resolve([]),
+      isHistorical
+        ? resolveHistoricalStocks(userPortfolioId, userPortfolio.userAssets, reportDateUTC)
+        : Promise.resolve(null),
+    ]);
+
+    const historicalPriceMap = new Map<string, number>(); // assetId → closest price on or before reportDate
+    for (const row of historyRows) {
+      historicalPriceMap.set(row.assetId, Number(row.closePrice));
     }
 
     // In strict mode, fail only if an asset has NO price history at all
@@ -830,18 +853,6 @@ async function generatePortfolioReport(
     if (strict !== false && missingAssets.length > 0) {
       throw new MissingHistoryPricesError(missingAssets, reportDateStr);
     }
-
-    // ── Resolve historical share counts ──────────────────────────────────
-    // For today's reports: live userAssets (source = "live") are accurate.
-    // For historical dates: use daily state snapshots or delta reconstruction
-    // so that future redemptions don't corrupt the historical record.
-    const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
-    const isHistorical = reportDateUTC.getTime() < todayUTC.getTime();
-
-    const historicalStockMap = isHistorical
-      ? await resolveHistoricalStocks(userPortfolioId, userPortfolio.userAssets, reportDateUTC)
-      : null;
 
     // ── Compute totals from final merged (X2) UserPortfolioAsset rows ──
     let totalCostPrice  = 0;
@@ -1383,42 +1394,60 @@ export async function generatePortfolioReportRange(req: Request, res: Response) 
 
     let generated = 0, skipped = 0, failed = 0;
     const errors: string[] = [];
+    const retryQueue: Date[] = [];
+
+    const processDate = async (reportDate: Date): Promise<"skipped" | "generated"> => {
+      const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
+
+      if (!force) {
+        const existing = await db.userPortfolioPerformanceReport.findFirst({
+          where:  { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
+          select: { id: true },
+        });
+        if (existing) return "skipped";
+      }
+
+      // strict=false → falls back to live price if no AssetPriceHistory entry exists
+      const id = await generateAndSaveReport(portfolioId, reportDate, false);
+      if (!id) throw new Error("generator returned null");
+      return "generated";
+    };
 
     // Each day's report is reconstructed independently from live portfolio
     // state + AssetPriceHistory + delta tables — it never reads another
     // day's already-generated report — so days are safe to process in
-    // parallel batches, same pattern as generateAllPortfoliosForDate above.
-    const BATCH = 10;
+    // parallel batches (same pattern as generateAllPortfoliosForDate above).
+    // Batch size is kept modest (not 10, like the all-portfolios variant)
+    // because here every concurrent call hits the SAME portfolio's rows —
+    // under load this occasionally trips transient DB connection/lock
+    // contention, so failures from the first pass are retried once,
+    // sequentially, below rather than reported straight away.
+    const BATCH = 8;
     for (let i = 0; i < dates.length; i += BATCH) {
       const batch = dates.slice(i, i + BATCH);
-      const results = await Promise.allSettled(
-        batch.map(async (reportDate) => {
-          const nextDay = new Date(reportDate.getTime() + 24 * 60 * 60 * 1000);
-
-          if (!force) {
-            const existing = await db.userPortfolioPerformanceReport.findFirst({
-              where:  { userPortfolioId: portfolioId, reportDate: { gte: reportDate, lt: nextDay } },
-              select: { id: true },
-            });
-            if (existing) return "skipped" as const;
-          }
-
-          // strict=false → falls back to live price if no AssetPriceHistory entry exists
-          const id = await generateAndSaveReport(portfolioId, reportDate, false);
-          if (!id) throw new Error("generator returned null");
-          return "generated" as const;
-        })
-      );
+      const results = await Promise.allSettled(batch.map(processDate));
 
       results.forEach((r, j) => {
-        const dateStr = batch[j].toISOString().slice(0, 10);
         if (r.status === "fulfilled") {
           if (r.value === "skipped") skipped++; else generated++;
         } else {
-          failed++;
-          errors.push(`[${dateStr}]: ${r.reason?.message ?? "unknown error"}`);
+          retryQueue.push(batch[j]);
         }
       });
+    }
+
+    // Retry pass — sequential, uncontended — for anything that failed above.
+    // Most first-pass failures are transient connection/lock contention from
+    // the concurrent batch, not real data problems, and succeed in isolation.
+    for (const reportDate of retryQueue) {
+      const dateStr = reportDate.toISOString().slice(0, 10);
+      try {
+        const outcome = await processDate(reportDate);
+        if (outcome === "skipped") skipped++; else generated++;
+      } catch (err: any) {
+        failed++;
+        errors.push(`[${dateStr}]: ${err?.message ?? "unknown error"}`);
+      }
     }
 
     return res.status(200).json({
